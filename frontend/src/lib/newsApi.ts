@@ -45,6 +45,7 @@ const categoryMap: Record<string, string> = {
   Environment: 'environment',
   Economy: 'business',
   Science: 'science',
+  Politics: 'politics',
   Polity: 'politics',
   Culture: 'entertainment',
   Sports: 'sports',
@@ -68,8 +69,17 @@ export const toRawArticle = (entry: RawNewsArticleResponse): Article => ({
   quiz: [],
 });
 
-export const fetchRawNews = async (category?: string): Promise<Article[]> => {
-  const query = new URLSearchParams({ country: 'in', language: 'en' });
+export const fetchRawNews = async (
+  category?: string,
+  options?: { country?: string | false; language?: string; q?: string },
+): Promise<Article[]> => {
+  const query = new URLSearchParams();
+  const country = options?.country === undefined ? 'in' : options.country;
+  const language = options?.language ?? 'en';
+  const searchQuery = options?.q?.trim();
+  if (country) query.set('country', country);
+  if (language) query.set('language', language);
+  if (searchQuery) query.set('q', searchQuery);
   const apiCategory = toNewsApiCategory(category);
   if (apiCategory) {
     query.set('category', apiCategory);
@@ -113,18 +123,34 @@ export const fetchLiveNewsByCategory = async (category: string, count = 8): Prom
   return (data.articles ?? []).map(toArticle);
 };
 
-export const generateArticleGameplay = async (article: Article) => {
+export const generateArticleGameplay = async (
+  article: Article,
+  options?: { generalKnowledge?: boolean; freshSeed?: string },
+) => {
+  const useGeneralKnowledge = options?.generalKnowledge ?? false;
+  const freshSeed = options?.freshSeed ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const payload = useGeneralKnowledge
+    ? {
+        headline: `General Knowledge Challenge ${freshSeed}`,
+        summary: `Create medium-difficulty general knowledge quiz questions spanning politics, economy, sports, science, technology, and world affairs. Seed ${freshSeed}.`,
+        fullContent: `General knowledge assessment prompt. Mix factual recall, reasoning, and elimination-based MCQs. Avoid too-easy and too-hard items. Unique attempt seed ${freshSeed}.`,
+        category: 'General Knowledge',
+        source: 'Qwen AI Generator',
+        publishedAt: new Date().toISOString(),
+      }
+    : {
+        headline: article.headline,
+        summary: article.summary,
+        fullContent: article.fullContent,
+        category: article.category,
+        source: article.source,
+        publishedAt: article.publishedAt,
+      };
+
   const response = await fetch(apiUrl('/news/generate'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      headline: article.headline,
-      summary: article.summary,
-      fullContent: article.fullContent,
-      category: article.category,
-      source: article.source,
-      publishedAt: article.publishedAt,
-    }),
+    body: JSON.stringify(payload),
   });
 
   const data = await response.json() as {

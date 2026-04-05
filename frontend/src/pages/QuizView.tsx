@@ -2,32 +2,42 @@ import { useParams, Link } from 'react-router-dom';
 import { useGameStore } from '@/store/gameStore';
 import { generateArticleGameplay } from '@/lib/newsApi';
 import { buildFastGameplay } from '@/lib/articleGameplay';
+import { recordQuizProgress } from '@/lib/progressSync';
 import { GlassCard } from '@/components/game/GlassCard';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle2, XCircle } from 'lucide-react';
 
 const QuizView = () => {
   const { id } = useParams();
   const article = useGameStore(s => s.feed.articles.find(a => a.id === id));
   const feedLoaded = useGameStore(s => s.feed.loaded);
-  const { addXP, incrementQuizzes, updateQuestProgress, hydrateArticleContent } = useGameStore();
+  const { updateQuestProgress, hydrateArticleContent } = useGameStore();
   const [currentQ, setCurrentQ] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [loadingGameplay, setLoadingGameplay] = useState(false);
+  const [activeQuiz, setActiveQuiz] = useState<ReturnType<typeof buildFastGameplay>['quiz']>([]);
+  const generatedForArticleRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!article || article.quiz.length || loadingGameplay) return;
+    if (!article || loadingGameplay || generatedForArticleRef.current === article.id) return;
 
     let cancelled = false;
+    const freshSeed = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    generatedForArticleRef.current = article.id;
     setLoadingGameplay(true);
-    hydrateArticleContent(article.id, buildFastGameplay(article));
-    generateArticleGameplay(article)
+    const fallback = buildFastGameplay(article);
+    setActiveQuiz(fallback.quiz);
+
+    generateArticleGameplay(article, { generalKnowledge: true, freshSeed })
       .then((content) => {
-        if (!cancelled) hydrateArticleContent(article.id, content);
+        if (!cancelled) {
+          setActiveQuiz(content.quiz);
+          hydrateArticleContent(article.id, content);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingGameplay(false);
@@ -39,8 +49,8 @@ const QuizView = () => {
   }, [article, loadingGameplay, hydrateArticleContent]);
 
   if (!article) return <div className="min-h-screen bg-nq-void flex items-center justify-center text-foreground">{feedLoaded ? 'No quiz available' : 'Loading article...'}</div>;
-  const fallback = !article.quiz.length ? buildFastGameplay(article) : null;
-  const quiz = article.quiz.length ? article.quiz : fallback?.quiz ?? [];
+  const fallback = !activeQuiz.length ? buildFastGameplay(article) : null;
+  const quiz = activeQuiz.length ? activeQuiz : fallback?.quiz ?? [];
   if (!quiz.length) return <div className="min-h-screen bg-nq-void flex items-center justify-center text-foreground">Generating quiz...</div>;
 
   const question = quiz[currentQ];
@@ -52,12 +62,12 @@ const QuizView = () => {
     const correct = selected === question.correct;
     if (correct) {
       setScore(s => s + 1);
-      addXP(30, 'purple');
-    } else {
-      addXP(5, 'purple');
     }
-    incrementQuizzes(correct);
     updateQuestProgress('quiz');
+    recordQuizProgress(correct, correct ? 30 : 5, {
+      title: article.headline,
+      category: article.category,
+    });
   };
 
   const handleNext = () => {

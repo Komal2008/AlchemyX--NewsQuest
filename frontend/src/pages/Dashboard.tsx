@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useGameStore } from '@/store/gameStore';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -6,22 +6,78 @@ import { HUDBar } from '@/components/game/HUDBar';
 import { GlassCard } from '@/components/game/GlassCard';
 import { XPProgressBar } from '@/components/game/XPProgressBar';
 import { motion } from 'framer-motion';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend } from 'recharts';
+import { ACTIVITY_UPDATED_EVENT, fetchActivityStats } from '@/lib/activityApi';
 
-const xpHistory = Array.from({ length: 30 }, (_, i) => ({ day: `D${i + 1}`, xp: Math.floor(Math.random() * 300 + 50) }));
 const COLORS = ['#00E5FF', '#7C3AED', '#FF6B00', '#00FF88'];
-const quizData = [
-  { name: 'Technology', value: 35 }, { name: 'Environment', value: 20 }, { name: 'Economy', value: 25 }, { name: 'Science', value: 20 },
-];
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const authUser = useAuthStore((s) => s.user);
   const user = useGameStore((s) => s.user);
+  const [trendData, setTrendData] = useState<Array<{ day: string; actions: number }>>([]);
+  const [categoryKeys, setCategoryKeys] = useState<string[]>([]);
+  const [categoryDaily, setCategoryDaily] = useState<Array<{ day: string; [category: string]: number | string }>>([]);
 
   useEffect(() => {
     if (!authUser) navigate('/login');
   }, [authUser, navigate]);
+
+  useEffect(() => {
+    if (!authUser?.id) return;
+    let cancelled = false;
+
+    const loadStats = () => {
+      void fetchActivityStats(authUser.id, 30)
+        .then((stats) => {
+          if (cancelled) return;
+          setTrendData(stats.trend.map((row) => ({
+            day: row.day,
+            actions: row.totalEvents,
+          })));
+          setCategoryKeys(stats.categories ?? []);
+          setCategoryDaily((stats.categoryDaily ?? []).map((row) => ({
+            day: row.day,
+            ...row.values,
+          })));
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setTrendData([]);
+            setCategoryKeys([]);
+            setCategoryDaily([]);
+          }
+        });
+    };
+
+    loadStats();
+
+    const onActivityUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ userId?: string }>;
+      if (customEvent.detail?.userId !== authUser.id) return;
+      loadStats();
+    };
+
+    window.addEventListener(ACTIVITY_UPDATED_EVENT, onActivityUpdated);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener(ACTIVITY_UPDATED_EVENT, onActivityUpdated);
+    };
+  }, [authUser?.id]);
+
+  const hasTrend = trendData.length > 0;
+  const chartTrend = useMemo(
+    () => (hasTrend ? trendData : [{ day: 'N/A', actions: 0 }]),
+    [hasTrend, trendData],
+  );
+  const hasCategoryDaily = categoryDaily.some((row) =>
+    categoryKeys.some((key) => Number(row[key] ?? 0) > 0),
+  );
+  const chartCategoryDaily = useMemo(
+    () => (hasCategoryDaily ? categoryDaily : [{ day: 'N/A' }]),
+    [categoryDaily, hasCategoryDaily],
+  );
 
   if (!authUser) return null;
 
@@ -111,7 +167,7 @@ const Dashboard = () => {
               <div className="grid grid-cols-5 md:grid-cols-10 gap-3">
                 {user.badges.slice(0, 20).map(b => (
                   <div key={b.id} className={`text-center ${!b.earned ? 'opacity-30 grayscale' : ''}`} title={b.name}>
-                    <span className="text-2xl">{b.icon}</span>
+                    <span className="text-3xl md:text-4xl">{b.icon}</span>
                   </div>
                 ))}
               </div>
@@ -121,9 +177,9 @@ const Dashboard = () => {
           {/* Charts */}
           <div className="grid gap-4">
             <GlassCard hover={false}>
-              <h3 className="font-display text-xs font-bold text-nq-text-secondary mb-3">XP HISTORY</h3>
+              <h3 className="font-display text-xs font-bold text-nq-text-secondary mb-3">ACTIVITY TREND (30 DAYS)</h3>
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={xpHistory}>
+                <AreaChart data={chartTrend}>
                   <defs>
                     <linearGradient id="xpGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#00E5FF" stopOpacity={0.3} />
@@ -133,21 +189,35 @@ const Dashboard = () => {
                   <XAxis dataKey="day" tick={false} axisLine={false} />
                   <YAxis tick={false} axisLine={false} />
                   <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, fontFamily: 'Space Mono' }} />
-                  <Area type="monotone" dataKey="xp" stroke="#00E5FF" fill="url(#xpGrad)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="actions" stroke="#00E5FF" fill="url(#xpGrad)" strokeWidth={2} />
                 </AreaChart>
               </ResponsiveContainer>
             </GlassCard>
 
             <GlassCard hover={false}>
-              <h3 className="font-display text-xs font-bold text-nq-text-secondary mb-3">QUIZ BY CATEGORY</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={quizData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" stroke="none">
-                    {quizData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8 }} />
-                </PieChart>
-              </ResponsiveContainer>
+              <h3 className="font-display text-xs font-bold text-nq-text-secondary mb-3">READ CATEGORIES BY DAY</h3>
+              {categoryKeys.length === 0 ? (
+                <p className="text-xs text-nq-text-muted">No category activity yet.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={chartCategoryDaily}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                    <XAxis dataKey="day" tick={false} axisLine={false} />
+                    <YAxis tick={false} axisLine={false} />
+                    <Tooltip contentStyle={{ background: 'rgba(17,24,39,0.9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8 }} />
+                    <Legend />
+                    {categoryKeys.map((category, index) => (
+                      <Bar
+                        key={category}
+                        dataKey={category}
+                        stackId="categories"
+                        fill={COLORS[index % COLORS.length]}
+                        radius={index === categoryKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                      />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </GlassCard>
           </div>
         </div>

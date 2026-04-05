@@ -1,19 +1,18 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, X } from 'lucide-react';
 import GlassInput from '@/components/auth/GlassInput';
 import ParticleBg from '@/components/ParticleBg';
-import { createId } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 import { useGameStore } from '@/store/gameStore';
-import { useAuthStore, type UserData } from '@/store/useAuthStore';
-import { MOCK_USERS } from '@/data/mockData';
-import { getDefaultAvatarId } from '@/data/avatars';
+import { useAuthStore } from '@/store/useAuthStore';
+import { buildUserDataFromSupabaseUser } from '@/lib/supabaseUser';
 
 const Login = () => {
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
+  const authUser = useAuthStore((s) => s.user);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const [email, setEmail] = useState('');
@@ -28,11 +27,16 @@ const Login = () => {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleError, setGoogleError] = useState('');
 
+  useEffect(() => {
+    if (authUser) {
+      navigate('/landing', { replace: true });
+    }
+  }, [authUser, navigate]);
+
   const validateEmail = useCallback(() => {
     if (!email) { setEmailError('This field is required'); return false; }
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    const isUsername = /^[a-zA-Z0-9_]{3,20}$/.test(email);
-    if (!isEmail && !isUsername) { setEmailError('Invalid email or username format'); return false; }
+    if (!isEmail) { setEmailError('Enter a valid email address'); return false; }
     setEmailError('');
     return true;
   }, [email]);
@@ -52,73 +56,44 @@ const Login = () => {
 
     setLoading(true);
     setError('');
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
 
-    await new Promise((r) => setTimeout(r, 1200));
-
-    const found = MOCK_USERS.find(
-      (u) => (u.email === email || u.username === email) && u.password === password
-    );
-
-    if (found) {
-      setSuccess(true);
-      const userData: UserData = {
-        id: createId(),
-        username: found.username,
-        email: found.email,
-        joinDate: new Date().toISOString(),
-        avatarId: getDefaultAvatarId(12),
-        avatarCustomization: { skinTone: 0, trailColor: 'cyan' },
-        currentLevel: 12,
-        totalXP: 2450,
-        xpToNextLevel: 3000,
-        streakCount: 7,
-        lastActiveDate: new Date().toISOString(),
-        interests: ['Politics', 'Science', 'Technology'],
-        dailyGoal: 5,
-        mode: 'both',
-        badges: ['Early Adopter', 'Quiz Streak 5'],
-        articlesRead: 89,
-        quizzesTotal: 127,
-        quizzesCorrect: 94,
-        predictionsTotal: 45,
-        predictionsCorrect: 30,
-        battleRating: 1847,
-        battleTier: 'ORACLE',
-        wins: 81,
-        losses: 38,
-        draws: 8,
-        recentForm: ['W', 'W', 'L', 'W', 'D', 'W', 'W', 'L', 'W', 'W'],
-      };
-      login(userData);
-      useGameStore.setState((state) => ({
-        user: {
-          ...state.user,
-          username: userData.username,
-          currentLevel: userData.currentLevel,
-          totalXP: userData.totalXP,
-          xpToNextLevel: userData.xpToNextLevel,
-          streakCount: userData.streakCount,
-          lastActiveDate: userData.lastActiveDate ?? state.user.lastActiveDate,
-          articlesRead: userData.articlesRead,
-          quizzesTotal: userData.quizzesTotal,
-          quizzesCorrect: userData.quizzesCorrect,
-          predictionsTotal: userData.predictionsTotal,
-          predictionsCorrect: userData.predictionsCorrect,
-          avatarId: userData.avatarId,
-          avatarBody: 'scout',
-          focusMode: 'both',
-          dailyTarget: userData.dailyGoal,
-          onboarded: true,
-        },
-      }));
-      setTimeout(() => navigate('/home', { replace: true }), 800);
-    } else {
+    if (signInError || !data.user) {
       setLoading(false);
-      setError('Invalid email or password. Please try again.');
+      setError(signInError?.message || 'Invalid email or password. Please try again.');
       setShake(true);
       setPassword('');
       setTimeout(() => setShake(false), 500);
+      return;
     }
+
+    const userData = buildUserDataFromSupabaseUser(data.user);
+    setSuccess(true);
+    login(userData);
+    useGameStore.setState((state) => ({
+      user: {
+        ...state.user,
+        id: userData.id,
+        username: userData.username,
+        currentLevel: userData.currentLevel,
+        totalXP: userData.totalXP,
+        xpToNextLevel: userData.xpToNextLevel,
+        streakCount: userData.streakCount,
+        lastActiveDate: userData.lastActiveDate ?? state.user.lastActiveDate,
+        articlesRead: userData.articlesRead,
+        quizzesTotal: userData.quizzesTotal,
+        quizzesCorrect: userData.quizzesCorrect,
+        predictionsTotal: userData.predictionsTotal,
+        predictionsCorrect: userData.predictionsCorrect,
+        avatarId: userData.avatarId,
+        avatarBody: 'scout',
+        onboarded: true,
+      },
+    }));
+    setLoading(false);
   };
 
   const slideContent = [
@@ -229,13 +204,13 @@ const Login = () => {
 
           <form onSubmit={handleSubmit} className="space-y-5" noValidate>
             <GlassInput
-              label="Email or Username"
+              label="Email Address"
               placeholder="explorer@newsquest.com"
               value={email}
               onChange={(v) => { setEmail(v); setEmailError(''); }}
               onBlur={validateEmail}
               error={emailError}
-              autoComplete="username"
+              autoComplete="email"
             />
             <div className="space-y-1">
               <GlassInput

@@ -10,20 +10,22 @@ import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Swords } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { fetchLeaderboard, type LeaderboardEntry } from '@/lib/leaderboardApi';
+import { useAuthStore } from '@/store/useAuthStore';
 
-const categories = ['All', 'Technology', 'Environment', 'Economy', 'Science', 'Polity'];
+const categories = ['All', 'Technology', 'Environment', 'Economy', 'Politics', 'Sports'];
 
 const HomeFeed = () => {
   const articles = useGameStore(s => s.feed?.articles ?? []);
   const feedLoading = useGameStore(s => s.feed.loading);
-  const quests = useGameStore(s => s.quests?.daily ?? []);
   const user = useGameStore(s => s.user);
+  const authUser = useAuthStore((s) => s.user);
   const feedLoaded = useGameStore(s => s.feed.loaded);
   const loadLiveFeed = useGameStore(s => s.loadLiveFeed);
-  const leaderboard = useGameStore(s => s.leaderboard?.global ?? []);
-  const battleRating = user?.battleRating ?? 1000;
-  const battleTier = user?.battleTier ?? 'ROOKIE';
-  const battleRecord = `${user?.wins ?? 0}W-${user?.losses ?? 0}L-${user?.draws ?? 0}D`;
+  const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
+  const battleRating = authUser?.battleRating ?? 1000;
+  const battleTier = authUser?.battleTier ?? 'ROOKIE';
+  const battleRecord = `${authUser?.wins ?? 0}W-${authUser?.losses ?? 0}L-${authUser?.draws ?? 0}D`;
   const [category, setCategory] = useState('All');
 
   const filtered = articles.filter(a => {
@@ -36,6 +38,22 @@ const HomeFeed = () => {
       void loadLiveFeed();
     }
   }, [feedLoaded, loadLiveFeed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadLeaders = async () => {
+      try {
+        const data = await fetchLeaderboard();
+        if (!cancelled) setLeaders(data.leaderboard ?? []);
+      } catch {
+        if (!cancelled) setLeaders([]);
+      }
+    };
+    void loadLeaders();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-nq-void grain-overlay">
@@ -59,27 +77,13 @@ const HomeFeed = () => {
             </GlassCard>
 
             <GlassCard hover={false} className="p-3">
-              <h4 className="font-display text-xs font-bold text-nq-text-secondary mb-3">DAILY QUESTS</h4>
-              <div className="space-y-2">
-                {quests.slice(0, 3).map((q, i) => (
-                  <div key={q.id} className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${q.completed ? 'bg-nq-green' : 'bg-nq-cyan/30'}`} />
-                    <span className="text-xs text-nq-text-secondary flex-1 truncate">{q.title}</span>
-                    <span className="font-mono text-[10px] text-nq-text-muted">{q.progress}/{q.target}</span>
-                  </div>
-                ))}
-              </div>
-              <Link to="/quests" className="block text-center mt-3 text-xs font-display text-nq-cyan hover:text-glow-cyan">VIEW ALL →</Link>
-            </GlassCard>
-
-            <GlassCard hover={false} className="p-3">
               <h4 className="font-display text-xs font-bold text-nq-text-secondary mb-3">DAILY LEADERS</h4>
-              {[...leaderboard]
+              {[...leaders]
                 .sort((a, b) => b.streak - a.streak)
                 .slice(0, 5)
-                .map((u, i) => (
+                .map((u) => (
                   <div key={u.id} className="flex items-center gap-2 py-1">
-                    <span className="text-sm">{u.avatar}</span>
+                    <span className="text-sm">{['🏃', '🧠', '🔮', '⚡', '👻'][u.avatarId % 5]}</span>
                     <span className="text-xs text-foreground flex-1 truncate">{u.username}</span>
                     <span className="font-display text-xs font-bold text-nq-orange">{u.streak}🔥</span>
                   </div>

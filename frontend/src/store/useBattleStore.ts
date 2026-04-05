@@ -18,6 +18,7 @@ export interface Opponent {
   recentForm: string[];
   isOnline: boolean;
   lastSeen: string;
+  socketId?: string;
 }
 
 export type BattleMode = 'quiz' | 'prediction' | 'mixed' | null;

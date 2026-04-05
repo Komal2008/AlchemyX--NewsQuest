@@ -5,6 +5,12 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 
 import newsRouter from './routes/news.js';
+import authRouter from './routes/auth.js';
+import activityRouter from './routes/activity.js';
+import battleRouter from './routes/battle.js';
+import predictionsRouter from './routes/predictions.js';
+import leaderboardRouter from './routes/leaderboard.js';
+import usersRouter from './routes/users.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { flushCache, getCacheStats } from './services/newsDataService.js';
 
@@ -38,13 +44,22 @@ app.use(cors({
   allowedHeaders: ['Content-Type'],
 }));
 
-app.use(rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please try again shortly.' },
-}));
+});
+
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/news')) {
+    next();
+    return;
+  }
+
+  apiLimiter(req, res, next);
+});
 
 app.use(express.json());
 
@@ -70,6 +85,12 @@ app.post('/api/cache/flush', (req, res) => {
 });
 
 app.use('/api/news', newsRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/activity', activityRouter);
+app.use('/api/battle', battleRouter);
+app.use('/api/predictions', predictionsRouter);
+app.use('/api/leaderboard', leaderboardRouter);
+app.use('/api/users', usersRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ success: false, error: 'Endpoint not found' });
@@ -84,5 +105,13 @@ app.listen(port, host, () => {
   console.log('GET  /api/news/category/:type');
   console.log('GET  /api/news/featured');
   console.log('POST /api/news/generate');
+  console.log('POST /api/activity/track');
+  console.log('GET  /api/activity/heatmap/:userId');
+  console.log('GET  /api/battle/session?userId=...');
+  console.log('POST /api/battle/queue/join');
+  console.log('POST /api/battle/invite');
+  console.log('POST /api/predictions/resolve');
+  console.log('GET  /api/leaderboard');
+  console.log('POST /api/users/sync');
   console.log('GET  /api/health');
 });

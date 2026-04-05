@@ -1,15 +1,43 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Swords, Brain, Sparkles, Zap, Users, Settings, X, Search, Timer, Target, Flame, Clock } from 'lucide-react';
+import { Swords, Brain, Sparkles, Zap, Users, Settings, X, Search, Target, Flame, Clock } from 'lucide-react';
 import ParticleBg from '@/components/ParticleBg';
-import { AvatarVisual } from '@/components/game/AvatarVisual';
 import { createId } from '@/lib/utils';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useBattleStore, type Opponent } from '@/store/useBattleStore';
+import { useBattleSocketContext } from '@/hooks/BattleSocketProvider';
+import { supabase } from '@/lib/supabase';
+import { getQuestionsForBattle } from '@/data/battleQuestions';
 import { MOCK_OPPONENTS } from '@/data/mockData';
 
 const BATTLE_CATEGORIES = ['All', 'Politics', 'Economy', 'Science', 'World', 'Tech', 'Environment'];
+type RivalProfileRow = {
+  id: string;
+  username: string | null;
+  email?: string | null;
+  avatarid?: number | null;
+  avatar_id?: number | null;
+  level?: number | null;
+  current_level?: number | null;
+  battle_rating: number | null;
+  battle_tier: string | null;
+  wins: number | null;
+  losses: number | null;
+  draws: number | null;
+  quizzes_total: number | null;
+  quizzes_correct: number | null;
+  predictions_total: number | null;
+  predictions_correct: number | null;
+  recent_form: string[] | null;
+  last_active_date: string | null;
+  created_at?: string | null;
+};
+type UserActivityRow = {
+  user_id: string;
+  activity_date: string;
+  action_count: number | null;
+};
 
 const tierColor = (tier: string) => {
   switch (tier) {
@@ -23,11 +51,63 @@ const tierColor = (tier: string) => {
   }
 };
 
+const mapProfileToOpponent = (profile: RivalProfileRow): Opponent => {
+  const wins = typeof profile.wins === 'number' ? profile.wins : 0;
+  const losses = typeof profile.losses === 'number' ? profile.losses : 0;
+  const draws = typeof profile.draws === 'number' ? profile.draws : 0;
+  const quizzesTotal = typeof profile.quizzes_total === 'number' ? profile.quizzes_total : 0;
+  const quizzesCorrect = typeof profile.quizzes_correct === 'number' ? profile.quizzes_correct : 0;
+  const predictionsTotal = typeof profile.predictions_total === 'number' ? profile.predictions_total : 0;
+  const predictionsCorrect = typeof profile.predictions_correct === 'number' ? profile.predictions_correct : 0;
+  const avatarId = typeof profile.avatarid === 'number'
+    ? profile.avatarid
+    : typeof profile.avatar_id === 'number'
+      ? profile.avatar_id
+      : 0;
+  const level = typeof profile.level === 'number'
+    ? profile.level
+    : typeof profile.current_level === 'number'
+      ? profile.current_level
+      : 1;
+  const fallbackLastSeen = profile.created_at ?? new Date().toISOString();
+
+  return {
+    id: profile.id,
+    username: profile.username ?? `player-${String(profile.id).slice(-4)}`,
+    avatarId,
+    level,
+    battleRating: typeof profile.battle_rating === 'number' ? profile.battle_rating : 1000,
+    tier: profile.battle_tier ?? 'ROOKIE',
+    quizAccuracy: quizzesTotal > 0 ? Math.round((quizzesCorrect / quizzesTotal) * 100) : 60,
+    predictionAccuracy: predictionsTotal > 0 ? Math.round((predictionsCorrect / predictionsTotal) * 100) : 60,
+    winRate: wins + losses > 0 ? Math.round((wins / Math.max(1, wins + losses)) * 100) : 50,
+    totalBattles: wins + losses + draws,
+    wins,
+    losses,
+    draws,
+    recentForm: Array.isArray(profile.recent_form) ? profile.recent_form : [],
+    isOnline: false,
+    lastSeen: profile.last_active_date ?? fallbackLastSeen,
+    socketId: profile.id,
+  };
+};
+
 const BattleLobby = () => {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const { status, mode, opponent, categories, timerSpeed, searchTime,
-    setMode, setStatus, setOpponent, setCategories, setTimerSpeed, setSearchTime, setBattleId, reset } = useBattleStore();
+    setMode, setStatus, setOpponent, setCategories, setTimerSpeed, setSearchTime, setBattleId, reset, startGame } = useBattleStore();
+  const {
+    onlinePlayers,
+    incomingChallenge,
+    outgoingStatus,
+    battleRoom,
+    challengePlayer,
+    respondToChallenge,
+    clearBattleRoom,
+    socketConnected,
+    selfId,
+  } = useBattleSocketContext();
 
   const [showSettings, setShowSettings] = useState(false);
   const [showChallenge, setShowChallenge] = useState(false);
@@ -35,10 +115,151 @@ const BattleLobby = () => {
   const [challengeTarget, setChallengeTarget] = useState<Opponent | null>(null);
   const [challengeStatus, setChallengeStatus] = useState<'idle' | 'pending' | 'accepted' | 'declined'>('idle');
   const [countdown, setCountdown] = useState(3);
+  const [rivalUsers, setRivalUsers] = useState<Opponent[]>([]);
+  const [rivalsLoading, setRivalsLoading] = useState(false);
+  const [rivalsError, setRivalsError] = useState<string | null>(null);
+
+  const liveOpponents = onlinePlayers.filter((player) => player.id !== user?.id && player.socketId !== selfId);
+  const suggested = liveOpponents.length > 0 ? liveOpponents : rivalUsers;
+
+  const openChallengeWithTarget = useCallback((target: Opponent) => {
+    if (!mode) setMode('quiz');
+    setChallengeTarget(target);
+    setChallengeStatus('idle');
+    setShowChallenge(true);
+  }, [mode, setMode]);
+
+  const challengeWithTarget = useCallback((target: Opponent) => {
+    if (!user) return;
+    const effectiveMode = mode ?? 'quiz';
+    if (!mode) setMode(effectiveMode);
+    const category = categories[0] || 'All';
+    const questions = getQuestionsForBattle(effectiveMode, category);
+    const sent = challengePlayer(target.id, {
+      mode: effectiveMode,
+      category,
+      timerSpeed,
+      questions,
+    });
+    setChallengeTarget(target);
+    if (sent) {
+      setChallengeStatus('pending');
+      setShowChallenge(true);
+      return;
+    }
+    setChallengeStatus('declined');
+    setShowChallenge(true);
+  }, [user, mode, setMode, categories, timerSpeed, challengePlayer]);
+
+  const handleSendChallenge = () => {
+    if (!challengeTarget) return;
+    challengeWithTarget(challengeTarget);
+  };
 
   useEffect(() => {
     if (!user) navigate('/login');
   }, [user, navigate]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+
+    const loadRivalUsers = async () => {
+      setRivalsLoading(true);
+      setRivalsError(null);
+      let data: RivalProfileRow[] | null = null;
+      let error: { message: string } | null = null;
+      const today = new Date();
+      const sevenDaysAgo = new Date(today);
+      sevenDaysAgo.setDate(today.getDate() - 7);
+      const fromDate = sevenDaysAgo.toISOString().slice(0, 10);
+
+      const activityResp = await supabase
+        .from('user_activity')
+        .select('user_id,activity_date,action_count')
+        .gte('activity_date', fromDate);
+
+      const activeUserIds = new Set<string>(
+        ((activityResp.data as UserActivityRow[] | null) ?? [])
+          .filter((row) => row.user_id && (typeof row.action_count !== 'number' || row.action_count > 0))
+          .map((row) => row.user_id)
+          .filter((id) => id !== user.id),
+      );
+
+      if (activityResp.error) {
+        error = { message: activityResp.error.message };
+      }
+
+      if (activeUserIds.size === 0) {
+        if (!active) return;
+        setRivalUsers([]);
+        setRivalsLoading(false);
+        return;
+      }
+
+      const activeIds = Array.from(activeUserIds);
+
+      const userProfileResp = await supabase
+        .from('user_profile')
+        .select('id,username,email,avatarid,level,battle_rating,battle_tier,created_at')
+        .in('id', activeIds);
+
+      if (userProfileResp.error) {
+        const fallbackResp = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', activeIds);
+        data = (fallbackResp.data as RivalProfileRow[] | null) ?? null;
+        if (fallbackResp.error) {
+          error = { message: fallbackResp.error.message };
+        }
+      } else {
+        data = (userProfileResp.data as RivalProfileRow[] | null) ?? null;
+      }
+
+      if (!active) return;
+      if (error) {
+        setRivalsError(error.message);
+        setRivalUsers([]);
+      } else {
+        setRivalUsers((data ?? []).map(mapProfileToOpponent));
+      }
+      setRivalsLoading(false);
+    };
+
+    void loadRivalUsers();
+
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!battleRoom || !user) return;
+
+    const opponentPlayer = battleRoom.players.find((player) => player.id !== user.id);
+    if (!opponentPlayer) {
+      clearBattleRoom();
+      return;
+    }
+    if (!opponentPlayer) return;
+
+    setMode(battleRoom.mode);
+    setBattleId(battleRoom.roomId);
+    setOpponent(opponentPlayer as Opponent);
+    setStatus('pre_battle');
+    setCategories([battleRoom.category]);
+    setTimerSpeed(battleRoom.timerSpeed);
+    startGame(battleRoom.questions);
+    navigate(`/battle/${battleRoom.roomId}`);
+  }, [battleRoom, user, setMode, setBattleId, setOpponent, setStatus, setCategories, setTimerSpeed, startGame, navigate, clearBattleRoom]);
+
+  useEffect(() => {
+    if (outgoingStatus === 'pending') setChallengeStatus('pending');
+    if (outgoingStatus === 'accepted') setChallengeStatus('accepted');
+    if (outgoingStatus === 'declined') setChallengeStatus('declined');
+    if (outgoingStatus === 'idle') setChallengeStatus('idle');
+  }, [outgoingStatus]);
 
   // Matchmaking simulation
   const startSearch = useCallback(() => {
@@ -86,9 +307,10 @@ const BattleLobby = () => {
 
   if (!user) return null;
 
-  const suggested = MOCK_OPPONENTS
-    .filter((o) => Math.abs(o.battleRating - user.battleRating) < 200 && o.isOnline)
-    .slice(0, 3);
+  const filteredRivalUsers = suggested.filter((o) =>
+    o.id !== user.id &&
+    (!challengeSearch || o.username.toLowerCase().includes(challengeSearch.toLowerCase()))
+  );
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-[#171b20] grain-overlay">
@@ -122,9 +344,9 @@ const BattleLobby = () => {
               <motion.div
                 animate={{ y: [0, -6, 0] }}
                 transition={{ duration: 3, repeat: Infinity }}
-                className="w-24 h-24 mb-3 flex items-center justify-center overflow-hidden"
+                className="text-7xl mb-3"
               >
-                <AvatarVisual avatarId={user.avatarId} className="text-7xl" imageClassName="w-24 h-24" />
+                {['🏃', '🧠', '🔮', '⚡', '👻'][user.avatarId]}
               </motion.div>
               <h2 className="font-orbitron text-lg uppercase tracking-wider text-white/90">{user.username}</h2>
               <span className="text-xs font-space-mono text-white/45">Level {user.currentLevel}</span>
@@ -163,9 +385,8 @@ const BattleLobby = () => {
                 {user.recentForm.map((r, i) => (
                   <div
                     key={i}
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                      r === 'W' ? 'bg-auth-success/20 text-auth-success' : r === 'L' ? 'bg-auth-error/20 text-auth-error' : 'bg-auth-warning/20 text-auth-warning'
-                    }`}
+                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${r === 'W' ? 'bg-auth-success/20 text-auth-success' : r === 'L' ? 'bg-auth-error/20 text-auth-error' : 'bg-auth-warning/20 text-auth-warning'
+                      }`}
                   >
                     {r === 'W' ? '✓' : r === 'L' ? '✗' : '='}
                   </div>
@@ -235,9 +456,8 @@ const BattleLobby = () => {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setMode(m.id)}
-                className={`w-full glass p-4 flex items-center gap-4 rounded-2xl transition-all bg-[#21262c]/80 border border-white/10 ${
-                  mode === m.id ? `${m.borderColor} border-2 shadow-[0_0_22px_rgba(124,58,237,0.18)]` : 'hover:border-white/20'
-                }`}
+                className={`w-full glass p-4 flex items-center gap-4 rounded-2xl transition-all bg-[#21262c]/80 border border-white/10 ${mode === m.id ? `${m.borderColor} border-2 shadow-[0_0_22px_rgba(124,58,237,0.18)]` : 'hover:border-white/20'
+                  }`}
               >
                 <span className={mode === m.id ? 'text-[#7ad4ff]' : 'text-white/45'}>{m.icon}</span>
                 <div className="flex-1 text-left">
@@ -263,9 +483,8 @@ const BattleLobby = () => {
                     <button
                       key={c}
                       onClick={() => setCategories(categories.includes(c) ? categories.filter((x) => x !== c) : [...categories, c])}
-                      className={`px-3 py-1 rounded-full text-[11px] font-plex transition-all border ${
-                        categories.includes(c) ? 'bg-[#b07cff]/20 border-[#b07cff]/30 text-[#d6b7ff]' : 'bg-white/5 border-white/10 text-white/45'
-                      }`}
+                      className={`px-3 py-1 rounded-full text-[11px] font-plex transition-all border ${categories.includes(c) ? 'bg-[#b07cff]/20 border-[#b07cff]/30 text-[#d6b7ff]' : 'bg-white/5 border-white/10 text-white/45'
+                        }`}
                     >
                       {c}
                     </button>
@@ -279,9 +498,8 @@ const BattleLobby = () => {
                     <button
                       key={t.v}
                       onClick={() => setTimerSpeed(t.v)}
-                      className={`flex-1 py-1.5 rounded-xl text-xs font-plex transition-all border ${
-                        timerSpeed === t.v ? 'bg-[#57b7ff]/20 border-[#57b7ff]/30 text-[#57b7ff]' : 'bg-white/5 border-white/10 text-white/45'
-                      }`}
+                      className={`flex-1 py-1.5 rounded-xl text-xs font-plex transition-all border ${timerSpeed === t.v ? 'bg-[#57b7ff]/20 border-[#57b7ff]/30 text-[#57b7ff]' : 'bg-white/5 border-white/10 text-white/45'
+                        }`}
                     >
                       {t.l}
                     </button>
@@ -295,17 +513,17 @@ const BattleLobby = () => {
           <div className="w-full max-w-sm space-y-3">
             {status === 'idle' && (
               <>
-                  <motion.button
-                    whileHover={mode ? { scale: 1.03 } : {}}
-                    whileTap={mode ? { scale: 0.97 } : {}}
-                    onClick={startSearch}
-                    disabled={!mode}
+                <motion.button
+                  whileHover={mode ? { scale: 1.03 } : {}}
+                  whileTap={mode ? { scale: 0.97 } : {}}
+                  onClick={startSearch}
+                  disabled={!mode}
                   className="w-full h-16 rounded-2xl text-base flex items-center justify-center gap-3 font-orbitron tracking-wider text-white border border-white/15 bg-gradient-to-r from-[#58b9ff] via-[#8b5cf6] to-[#ff6ea8] shadow-[0_0_28px_rgba(0,229,255,0.18)] disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
+                >
                   <Swords className="w-6 h-6" />
                   FIND RIVAL
                 </motion.button>
-                <button onClick={() => setShowChallenge(true)} className="w-full h-12 rounded-2xl glass flex items-center justify-center gap-2 font-orbitron text-xs tracking-[0.2em] text-white/70 hover:text-white transition-colors border border-white/10 bg-white/5">
+                <button onClick={() => { if (!mode) setMode('quiz'); setShowChallenge(true); }} className="w-full h-12 rounded-2xl glass flex items-center justify-center gap-2 font-orbitron text-xs tracking-[0.2em] text-white/70 hover:text-white transition-colors border border-white/10 bg-white/5">
                   <Users className="w-5 h-5" />
                   CHALLENGE FRIEND
                 </button>
@@ -368,9 +586,17 @@ const BattleLobby = () => {
                 <div>
                   <p className="text-[10px] font-space-mono uppercase text-muted-foreground mb-3">Recommended Rivals</p>
                   <div className="space-y-2">
-                    {suggested.map((opp) => (
-                      <OpponentCard key={opp.id} opp={opp} onChallenge={() => { setOpponent(opp); setStatus('found'); }} />
-                    ))}
+                    {rivalsLoading ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">Loading rivals...</div>
+                    ) : rivalsError ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-red-300">{rivalsError}</div>
+                    ) : suggested.length === 0 ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">No rivals available</div>
+                    ) : (
+                      suggested.map((opp) => (
+                        <OpponentCard key={opp.id} opp={opp} onChallenge={() => openChallengeWithTarget(opp)} />
+                      ))
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -403,7 +629,7 @@ const BattleLobby = () => {
 
                 <div className="flex flex-col items-center">
                   <motion.div animate={{ y: [0, -6, 0], scale: [1, 1.02, 1] }} transition={{ duration: 3, repeat: Infinity }} className="text-7xl mb-3 drop-shadow-[0_0_18px_rgba(0,229,255,0.18)]">
-                    <AvatarVisual avatarId={opponent.avatarId} className="text-7xl" imageClassName="w-24 h-24" />
+                    {['🏃', '🧠', '🔮', '⚡', '👻'][opponent.avatarId]}
                   </motion.div>
                   <h2 className="font-orbitron text-lg uppercase text-white/90">{opponent.username}</h2>
                   <span className="text-xs font-space-mono text-white/45">Level {opponent.level}</span>
@@ -489,23 +715,26 @@ const BattleLobby = () => {
                     />
                   </div>
                   <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {MOCK_OPPONENTS
-                      .filter((o) => !challengeSearch || o.username.toLowerCase().includes(challengeSearch.toLowerCase()))
-                      .slice(0, 5)
-                      .map((opp) => (
+                    {rivalsLoading ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">Loading users...</div>
+                    ) : rivalsError ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-red-300">{rivalsError}</div>
+                    ) : filteredRivalUsers.length === 0 ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">No users found</div>
+                    ) : (
+                      filteredRivalUsers.map((opp) => (
                         <div key={opp.id} className="glass p-2 flex items-center gap-2 cursor-pointer rounded-xl border border-white/10 bg-white/5 hover:border-[#57b7ff]/30 transition-all"
                           onClick={() => setChallengeTarget(opp)}
                         >
-                          <span className="w-8 h-8 flex items-center justify-center overflow-hidden">
-                            <AvatarVisual avatarId={opp.avatarId} className="text-xl" imageClassName="w-8 h-8" />
-                          </span>
+                          <span className="text-xl">{['🏃', '🧠', '🔮', '⚡', '👻'][opp.avatarId]}</span>
                           <div className="flex-1">
                             <p className="font-orbitron text-xs text-white/85">{opp.username}</p>
                             <p className="text-[10px] text-white/45 font-space-mono">Lv{opp.level} • {opp.battleRating} BR</p>
                           </div>
                           <span className="text-[10px] font-orbitron text-[#57b7ff]">SELECT</span>
                         </div>
-                      ))}
+                      ))
+                    )}
                   </div>
                 </>
               )}
@@ -516,33 +745,19 @@ const BattleLobby = () => {
                     Challenge <span className="text-battle-red font-bold">@{challengeTarget.username}</span> to a{' '}
                     <span className="text-[#57b7ff] font-bold">{mode?.toUpperCase() || 'QUIZ'}</span> Battle?
                   </p>
-                  <div className="flex gap-3">
-                    <button onClick={() => setChallengeTarget(null)} className="flex-1 h-10 glass rounded-xl font-plex text-sm text-white/55 border border-white/10">CANCEL</button>
-                    <button
-                      onClick={() => {
-                        setChallengeStatus('pending');
-                        const delay = 3000 + Math.random() * 5000;
-                        setTimeout(() => {
-                          const accepted = Math.random() > 0.3;
-                          if (accepted) {
-                            setChallengeStatus('accepted');
-                            setTimeout(() => {
-                              setShowChallenge(false);
-                              setChallengeStatus('idle');
-                              setOpponent(challengeTarget);
-                              setStatus('found');
-                              setChallengeTarget(null);
-                            }, 1000);
-                          } else {
-                            setChallengeStatus('declined');
-                            setTimeout(() => { setChallengeStatus('idle'); setChallengeTarget(null); }, 2000);
-                          }
-                        }, delay);
-                      }}
-                      className="flex-1 h-10 rounded-xl font-orbitron text-xs text-white border border-white/10 bg-gradient-to-r from-[#58b9ff] via-[#8b5cf6] to-[#ff6ea8]"
-                    >
-                      CONFIRM
-                    </button>
+                  <div className="space-y-2">
+                    {!socketConnected && (
+                      <p className="text-[10px] text-white/50">Socket disconnected. Please wait until the connection restores before challenging.</p>
+                    )}
+                    <div className="flex gap-3">
+                      <button onClick={() => setChallengeTarget(null)} className="flex-1 h-10 glass rounded-xl font-plex text-sm text-white/55 border border-white/10">CANCEL</button>
+                      <button
+                        onClick={() => handleSendChallenge()}
+                        className="flex-1 h-10 rounded-xl font-orbitron text-xs text-white border border-white/10 transition bg-gradient-to-r from-[#58b9ff] via-[#8b5cf6] to-[#ff6ea8]"
+                      >
+                        CONFIRM
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -575,15 +790,44 @@ const BattleLobby = () => {
           </motion.div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {incomingChallenge && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="glass p-6 max-w-md w-full space-y-4 border border-white/10 rounded-3xl"
+            >
+              <p className="text-sm text-white/60 uppercase tracking-[0.35em]">Incoming Challenge</p>
+              <h3 className="font-orbitron text-xl text-white">{incomingChallenge.from.username} challenged you to a battle</h3>
+              <p className="text-sm text-white/70">Mode: {incomingChallenge.mode.toUpperCase()} • Category: {incomingChallenge.category}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => respondToChallenge(incomingChallenge.challengeId, false)}
+                  className="flex-1 h-12 rounded-2xl glass text-sm font-medium text-white/80 border border-white/10"
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={() => respondToChallenge(incomingChallenge.challengeId, true)}
+                  className="flex-1 h-12 rounded-2xl bg-battle-blue text-white text-sm font-medium"
+                >
+                  Accept
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
 
 const OpponentCard = ({ opp, onChallenge }: { opp: Opponent; onChallenge: () => void }) => (
   <div className="glass p-3 flex items-center gap-3">
-    <span className="w-8 h-8 flex items-center justify-center overflow-hidden">
-      <AvatarVisual avatarId={opp.avatarId} className="text-3xl" imageClassName="w-8 h-8" />
-    </span>
+    <span className="text-3xl">{['🏃', '🧠', '🔮', '⚡', '👻'][opp.avatarId]}</span>
     <div className="flex-1 min-w-0">
       <p className="font-orbitron text-xs truncate">{opp.username}</p>
       <div className="flex items-center gap-2">

@@ -6,12 +6,16 @@ import { GlassCard } from '@/components/game/GlassCard';
 import { HUDBar } from '@/components/game/HUDBar';
 import { AvatarVisual } from '@/components/game/AvatarVisual';
 import { AVATAR_OPTIONS, getLastActiveAvatarId, isAvatarUnlocked } from '@/data/avatars';
+import { supabase } from '@/lib/supabase';
+import { buildUserDataFromSupabaseUser } from '@/lib/supabaseUser';
+import { syncProfileToDatabase } from '@/lib/profileApi';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useGameStore } from '@/store/gameStore';
 
 const AvatarEditor = () => {
   const navigate = useNavigate();
   const authUser = useAuthStore((s) => s.user);
+  const login = useAuthStore((s) => s.login);
   const updateAuthUser = useAuthStore((s) => s.updateUser);
   const gameUser = useGameStore((s) => s.user);
   const currentLevel = authUser?.currentLevel ?? gameUser.currentLevel;
@@ -23,13 +27,56 @@ const AvatarEditor = () => {
   }, [authUser?.avatarId, gameUser.avatarId]);
 
   const selected = AVATAR_OPTIONS.find((avatar) => avatar.id === selectedAvatar) ?? AVATAR_OPTIONS[0];
+  const earnedBadgeIds = authUser?.badges ?? gameUser.badges.filter((badge) => badge.earned).map((badge) => badge.id);
+  const selectedUnlocked = isAvatarUnlocked(selected, currentLevel, earnedBadgeIds);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (!selectedUnlocked) {
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentUser = sessionData.session?.user;
+
+    if (!currentUser) {
+      navigate('/login', { replace: true });
+      return;
+    }
+
+    const currentMetadata = (currentUser.user_metadata ?? {}) as Record<string, unknown>;
+    const nextMetadata = {
+      ...currentMetadata,
+      avatar_id: selectedAvatar,
+      avatarId: selectedAvatar,
+    };
+
+    const { data, error } = await supabase.auth.updateUser({ data: nextMetadata });
+
+    if (error || !data.user) {
+      return;
+    }
+
+    const updatedUser = buildUserDataFromSupabaseUser(data.user);
+    await syncProfileToDatabase(updatedUser).catch(() => { });
+    login(updatedUser);
     updateAuthUser({ avatarId: selectedAvatar });
     useGameStore.setState((state) => ({
       user: {
         ...state.user,
+        id: updatedUser.id,
+        username: updatedUser.username,
+        currentLevel: updatedUser.currentLevel,
+        totalXP: updatedUser.totalXP,
+        xpToNextLevel: updatedUser.xpToNextLevel,
+        streakCount: updatedUser.streakCount,
+        lastActiveDate: updatedUser.lastActiveDate ?? state.user.lastActiveDate,
+        articlesRead: updatedUser.articlesRead,
+        quizzesTotal: updatedUser.quizzesTotal,
+        quizzesCorrect: updatedUser.quizzesCorrect,
+        predictionsTotal: updatedUser.predictionsTotal,
+        predictionsCorrect: updatedUser.predictionsCorrect,
         avatarId: selectedAvatar,
+        dailyTarget: updatedUser.dailyGoal,
       },
     }));
     setSaved(true);
@@ -74,10 +121,14 @@ const AvatarEditor = () => {
               <motion.button
                 whileTap={{ scale: 0.98 }}
                 onClick={handleSave}
-                className="w-full h-[52px] btn-gradient text-sm flex items-center justify-center gap-2"
+                disabled={!selectedUnlocked}
+                className={`w-full h-[52px] text-sm flex items-center justify-center gap-2 ${selectedUnlocked
+                  ? 'btn-gradient'
+                  : 'rounded-xl border border-white/10 bg-white/5 text-nq-text-muted cursor-not-allowed'
+                  }`}
               >
                 {saved ? <Check className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
-                SAVE AVATAR
+                {selectedUnlocked ? 'SAVE AVATAR' : `LOCKED • ${selected.badge.toUpperCase()}`}
               </motion.button>
             </div>
           </GlassCard>
@@ -97,28 +148,26 @@ const AvatarEditor = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
               {AVATAR_OPTIONS.map((avatar) => {
                 const active = selectedAvatar === avatar.id;
-                const unlocked = isAvatarUnlocked(avatar, currentLevel);
+                const unlocked = isAvatarUnlocked(avatar, currentLevel, earnedBadgeIds);
                 return (
                   <motion.button
                     key={avatar.id}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => unlocked && setSelectedAvatar(avatar.id)}
-                    className={`group text-left rounded-2xl border transition-all p-3 ${
-                      active
-                        ? 'border-nq-cyan bg-nq-cyan/10 shadow-[0_0_20px_rgba(0,229,255,0.16)]'
-                        : unlocked
-                          ? 'border-white/10 bg-white/5 hover:border-white/20'
-                          : 'border-white/5 bg-white/5 opacity-50 cursor-not-allowed grayscale'
-                    }`}
+                    onClick={() => setSelectedAvatar(avatar.id)}
+                    className={`group text-left rounded-2xl border transition-all p-3 ${active
+                      ? 'border-nq-cyan bg-nq-cyan/10 shadow-[0_0_20px_rgba(0,229,255,0.16)]'
+                      : unlocked
+                        ? 'border-white/10 bg-white/5 hover:border-white/20'
+                        : 'border-white/5 bg-white/5 opacity-60 grayscale'
+                      }`}
                   >
-                    <div className="aspect-square rounded-2xl bg-black/20 border border-white/10 overflow-hidden flex items-center justify-center mb-3">
-                      {unlocked ? (
-                        <AvatarVisual avatarId={avatar.id} className="text-5xl" imageClassName="w-full h-full" />
-                      ) : (
-                        <div className="flex flex-col items-center gap-1 text-center">
-                          <span className="text-2xl text-nq-text-muted">🔒</span>
-                          <span className="text-[9px] font-space-mono text-nq-text-muted">{avatar.badge}</span>
+                    <div className="relative aspect-square rounded-2xl bg-black/20 border border-white/10 overflow-hidden flex items-center justify-center mb-3">
+                      <AvatarVisual avatarId={avatar.id} className="text-5xl" imageClassName="w-full h-full" />
+                      {!unlocked && (
+                        <div className="absolute inset-0 bg-black/45 flex flex-col items-center justify-center gap-1">
+                          <span className="text-2xl text-white/90">🔒</span>
+                          <span className="text-[9px] font-space-mono text-white/80">{avatar.badge}</span>
                         </div>
                       )}
                     </div>

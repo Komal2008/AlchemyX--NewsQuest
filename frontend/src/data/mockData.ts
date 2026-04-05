@@ -1,12 +1,6 @@
 import type { Opponent } from '@/store/useBattleStore';
 export { AVATAR_OPTIONS } from './avatars';
 
-export const MOCK_USERS = [
-  { username: 'demo_user', email: 'demo@newsquest.com', password: 'password123' },
-  { username: 'oracle_sage', email: 'sage@newsquest.com', password: 'predict2024' },
-  { username: 'quiz_master', email: 'master@newsquest.com', password: 'quiz1234' },
-];
-
 const TIERS = ['ROOKIE', 'ANALYST', 'STRATEGIST', 'ORACLE', 'MASTER', 'LEGEND'];
 const getTier = (br: number) => {
   if (br < 1000) return TIERS[0];

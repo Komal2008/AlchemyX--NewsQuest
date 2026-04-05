@@ -1,4 +1,6 @@
 import NodeCache from 'node-cache';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 const BASE_URL = 'https://newsdata.io/api/1/latest';
 
@@ -8,8 +10,71 @@ const cache = new NodeCache({
   useClones: false,
 });
 
-const SUMMARY_WORD_TARGET = 200;
-const BODY_WORD_TARGET = 700;
+const CACHE_FILE = path.resolve(process.cwd(), '.cache', 'news-data-cache.json');
+
+const lastSuccessfulResults = new Map<string, {
+  articles: NewsArticle[];
+  nextPage: string | null;
+  totalResults: number;
+  _cached: boolean;
+}>();
+let latestSuccessfulResult: {
+  articles: NewsArticle[];
+  nextPage: string | null;
+  totalResults: number;
+  _cached: boolean;
+} | null = null;
+const inFlightRequests = new Map<string, Promise<{
+  articles: NewsArticle[];
+  nextPage: string | null;
+  totalResults: number;
+  _cached: boolean;
+}>>();
+
+const loadPersistentCache = () => {
+  try {
+    if (!existsSync(CACHE_FILE)) return;
+    const raw = readFileSync(CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw) as {
+      latest?: {
+        articles: NewsArticle[];
+        nextPage: string | null;
+        totalResults: number;
+        _cached: boolean;
+      } | null;
+      entries?: Array<[
+        string,
+        {
+          articles: NewsArticle[];
+          nextPage: string | null;
+          totalResults: number;
+          _cached: boolean;
+        }
+      ]>;
+    };
+
+    latestSuccessfulResult = parsed.latest ?? null;
+    for (const [key, value] of parsed.entries ?? []) {
+      lastSuccessfulResults.set(key, value);
+    }
+  } catch {
+    // Ignore cache load failures and fall back to live fetches.
+  }
+};
+
+const savePersistentCache = () => {
+  try {
+    mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+    writeFileSync(CACHE_FILE, JSON.stringify({
+      latest: latestSuccessfulResult,
+      entries: Array.from(lastSuccessfulResults.entries()),
+    }, null, 2));
+  } catch {
+    // Ignore cache write failures; memory cache still works.
+  }
+};
+
+loadPersistentCache();
 
 export interface NewsDataQuery {
   q?: string;
@@ -70,9 +135,37 @@ const estimateReadTime = (text: string) => {
 
 const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim();
 
-const toExactWordCount = (text: string, targetWords: number) => {
-  const words = normalizeText(text).split(/\s+/).filter(Boolean);
-  return words.slice(0, targetWords).join(' ');
+const extractCompleteSentences = (text: string) => {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
+  const complete = normalized.match(/[^.!?]+[.!?]+/g)?.map((entry) => normalizeText(entry)).filter(Boolean) ?? [];
+  if (complete.length > 0) return complete;
+  return [normalized];
+};
+
+const dedupeSentences = (text: string) => {
+  const sentences = extractCompleteSentences(text);
+  if (sentences.length === 0) return '';
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const sentence of sentences) {
+    const key = normalizeText(sentence).toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(normalizeText(sentence));
+  }
+  return unique.join(' ');
+};
+const mergeSourcesWithoutDuplicates = (primary: string, fallbackSources: string[]) => {
+  const uniqueSources = Array.from(new Set(
+    [primary, ...fallbackSources]
+      .map((value) => normalizeText(value))
+      .filter(Boolean),
+  ));
+
+  if (uniqueSources.length === 0) return '';
+
+  return dedupeSentences(uniqueSources.join(' '));
 };
 
 const isPaywalledContent = (content: string) =>
@@ -83,63 +176,62 @@ const isPaywalledContent = (content: string) =>
 const buildReadableContent = (title: string, description: string, content?: string) => {
   const cleanDescription = description.trim();
   const cleanContent = content?.trim();
-
-  const sourceText = cleanContent && !isPaywalledContent(cleanContent)
-    ? cleanContent
-    : cleanDescription || title;
-  const topicLine = cleanDescription || `Summary: ${title}.`;
-  const subject = cleanDescription || title;
-  const expanded = [
-    topicLine,
-    `In simple terms, this story is about ${subject.toLowerCase()}, but the detail that matters most is how the update changes the way readers understand the event. A headline can only point to the opening frame of the story, while the full version explains who is involved, what happened, and why the timing matters.`,
-    `The broader context is important because news rarely exists in isolation. Even a single report can connect to policy, public reaction, economic effects, technology trends, or social debates that have been building for some time. Reading the story in a fuller form helps make those links clearer and makes the article more useful for follow-up understanding.`,
-    `The report also becomes easier to interpret when the reader sees the sequence of events in order. First comes the core development, then comes the explanation of how it affects the immediate situation, and finally comes the part that shows what may happen next. That structure is why NewsQuest expands each article into a more complete reading experience.`,
-    `If there is original reporting available from the source, the article can be understood through the language, numbers, names, or statements used there. If that source text is limited or paywalled, the summary still preserves the important meaning by restating the story in clear terms that stay close to the original topic and avoid vague filler.`,
-    `The expanded read also gives the audience a better sense of momentum. Some stories are about sudden changes, while others are about slow-moving shifts that only become visible when you look at the details closely. That difference matters because it tells the reader whether the update is likely to fade quickly or continue developing over time.`,
-    `What follows next may be an official response, a clarification, another round of data, or a reaction from the people and institutions involved. By presenting the story in a fuller format, NewsQuest helps the reader understand not only what the article says today, but also what to watch for in the next update.`,
-    `This longer body text is intentionally written to be readable, detailed, and easy to revisit. It gives the story room to breathe while still keeping the main facts close to the surface so the reader can move from the summary into the full context without losing the thread of the article.`,
-    sourceText ? `Source context: ${sourceText}.` : `Source context: ${subject}.`,
-  ].join('\n\n');
-
-  return toExactWordCount(expanded, BODY_WORD_TARGET);
+  const sourceText = cleanContent && !isPaywalledContent(cleanContent) ? cleanContent : '';
+  const merged = [cleanDescription, sourceText]
+    .map((value) => normalizeText(value))
+    .filter(Boolean)
+    .join('\n\n');
+  const mergedWithoutRepeats = dedupeSentences(merged);
+  return mergeSourcesWithoutDuplicates(
+    mergedWithoutRepeats || normalizeText(title),
+    [sourceText, cleanDescription, title],
+  );
 };
 
 const buildExpandedSummary = (title: string, description: string, content?: string) => {
   const cleanDescription = description.trim();
   const cleanContent = content?.trim();
-  const base = cleanDescription || cleanContent || title;
-  const topic = title.toLowerCase();
-  const snippet = cleanContent ? cleanContent.slice(0, 260).replace(/\s+/g, ' ').trim() : base;
-  const expanded = [
-    `${base}. In this NewsQuest summary, the story is unpacked in a more complete way so readers can understand not just what happened, but why it matters. The core issue here is ${topic}, and the latest update fits into a wider pattern of changes that readers should keep an eye on.`,
-    `The article points to the immediate facts, but the bigger picture is how those facts could shape the next few days or weeks. When news moves quickly, the useful part is often the context around it: who is involved, what triggered the change, and what could happen next. That is what makes this story worth following beyond the first headline.`,
-    `If we look more closely, the story is connected to practical outcomes for people, institutions, or markets. The details suggest that the situation is still developing, which means the next official statements, responses, or data releases may be just as important as the initial report. In other words, this is not a standalone update; it is part of an ongoing conversation.`,
-    `A short version of the story would stop at the headline, but the fuller view helps explain the momentum behind it. ${snippet} This added context gives the reader a better sense of the actors, the stakes, and the possible direction of the story. For NewsQuest, that deeper explanation is what turns a quick news item into something worth learning from.`,
-    `Looking ahead, the most important thing is to watch how the situation evolves and whether the next update confirms or challenges the current direction. That could mean new policy language, fresh numbers, public reactions, or a new development that changes the interpretation of the original report. This expanded summary is designed to keep the reading experience substantial, clear, and useful.`,
-    `The summary should feel complete enough that the reader can understand the article without needing extra background research. It should restate the main issue, explain the significance, and preserve enough specific detail to make the story feel grounded in the original reporting.`,
-  ].join('\n\n');
-
-  return toExactWordCount(expanded, SUMMARY_WORD_TARGET);
+  const base = normalizeText(cleanDescription || cleanContent || title);
+  return mergeSourcesWithoutDuplicates(
+    base,
+    [cleanDescription, cleanContent ?? '', title],
+  );
 };
 
 const normaliseCategory = (rawCategory: unknown) => {
   if (!rawCategory) return 'General';
 
-  const first = Array.isArray(rawCategory) ? rawCategory[0] : rawCategory;
-  const value = String(first ?? '').toLowerCase();
+  const values = (Array.isArray(rawCategory) ? rawCategory : [rawCategory])
+    .map((entry) => String(entry ?? '').toLowerCase().trim())
+    .filter(Boolean);
+  const value = values[0] ?? '';
 
   const map: Record<string, string> = {
     technology: 'Technology',
+    tech: 'Technology',
     science: 'Science',
+    climate: 'Environment',
     business: 'Economy',
+    economy: 'Economy',
+    finance: 'Economy',
     entertainment: 'Culture',
     sports: 'Sports',
     health: 'Science',
     politics: 'Polity',
+    polity: 'Polity',
+    government: 'Polity',
     environment: 'Environment',
+    ecological: 'Environment',
     world: 'World',
     top: 'General',
   };
+
+  for (const entry of values) {
+    const mapped = map[entry];
+    if (mapped && mapped !== 'General') {
+      return mapped;
+    }
+  }
 
   return map[value] ?? 'General';
 };
@@ -215,41 +307,74 @@ const fetchFromNewsData = async (params: NewsDataQuery) => {
     return { ...cached, _cached: true };
   }
 
-  const url = new URL(BASE_URL);
-  url.searchParams.set('apikey', apiKey);
-  url.searchParams.set('removeduplicate', '1');
-
-  for (const [key, value] of Object.entries(cleanParams)) {
-    url.searchParams.set(key, String(value));
+  const inFlight = inFlightRequests.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
   }
 
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new NewsDataError(`NewsData API responded with ${response.status}`, response.status, body);
+  const request = (async () => {
+    const url = new URL(BASE_URL);
+    url.searchParams.set('apikey', apiKey);
+    url.searchParams.set('removeduplicate', '1');
+
+    for (const [key, value] of Object.entries(cleanParams)) {
+      url.searchParams.set(key, String(value));
+    }
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      if (response.status === 429) {
+        const fallback = lastSuccessfulResults.get(cacheKey)
+          ?? latestSuccessfulResult
+          ?? cache.get<{
+            articles: NewsArticle[];
+            nextPage: string | null;
+            totalResults: number;
+            _cached: boolean;
+          }>(cacheKey);
+
+        if (fallback) {
+          return { ...fallback, _cached: true };
+        }
+      }
+
+      throw new NewsDataError(`NewsData API responded with ${response.status}`, response.status, body);
+    }
+
+    const data = await response.json() as {
+      status?: string;
+      results?: Array<Record<string, unknown>>;
+      nextPage?: string | null;
+      totalResults?: number;
+      message?: string;
+    };
+
+    if (data.status !== 'success') {
+      throw new NewsDataError(data.message ?? 'NewsData API returned a non-success status', 422, data);
+    }
+
+    const result = {
+      articles: transformArticles(data.results ?? []),
+      nextPage: data.nextPage ?? null,
+      totalResults: data.totalResults ?? 0,
+      _cached: false,
+    };
+
+    cache.set(cacheKey, result);
+    lastSuccessfulResults.set(cacheKey, result);
+    latestSuccessfulResult = result;
+    savePersistentCache();
+    return result;
+  })();
+
+  inFlightRequests.set(cacheKey, request);
+
+  try {
+    return await request;
+  } finally {
+    inFlightRequests.delete(cacheKey);
   }
-
-  const data = await response.json() as {
-    status?: string;
-    results?: Array<Record<string, unknown>>;
-    nextPage?: string | null;
-    totalResults?: number;
-    message?: string;
-  };
-
-  if (data.status !== 'success') {
-    throw new NewsDataError(data.message ?? 'NewsData API returned a non-success status', 422, data);
-  }
-
-  const result = {
-    articles: transformArticles(data.results ?? []),
-    nextPage: data.nextPage ?? null,
-    totalResults: data.totalResults ?? 0,
-    _cached: false,
-  };
-
-  cache.set(cacheKey, result);
-  return result;
 };
 
 export const getLatestNews = (options: NewsDataQuery = {}) => fetchFromNewsData(options);

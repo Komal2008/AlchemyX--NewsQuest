@@ -5,19 +5,16 @@ import { StreakBadge } from './StreakBadge';
 import { LevelBadge } from './LevelBadge';
 import { AvatarVisual } from './AvatarVisual';
 import { motion } from 'framer-motion';
-import { Home, BookOpen, Target, Trophy, User, Compass, BarChart3 } from 'lucide-react';
+import { Home, BookOpen, Trophy, User, BarChart3 } from 'lucide-react';
 
 const navItems = [
   { path: '/home', icon: Home, label: 'Feed' },
   { path: '/upsc', icon: BookOpen, label: 'UPSC' },
-  { path: '/quests', icon: Target, label: 'Quests' },
   { path: '/leaderboard', icon: Trophy, label: 'Rank' },
   { path: '/profile', icon: User, label: 'Profile' },
 ];
 
 export const HUDBar = () => {
-  const mode = useGameStore(s => s.feed.mode);
-  const setMode = useGameStore(s => s.setMode);
   const avatarId = useGameStore(s => s.user.avatarId);
   const location = useLocation();
 
@@ -43,18 +40,6 @@ export const HUDBar = () => {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
-          {/* Mode toggle */}
-          <div className="flex items-center glass rounded-full p-0.5">
-            {['news', 'upsc'].map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m as 'news' | 'upsc')}
-                className={`px-3 py-1 rounded-full text-xs font-display font-bold transition-all ${mode === m ? (m === 'news' ? 'bg-nq-cyan/20 text-nq-cyan glow-cyan' : 'bg-nq-purple/20 text-nq-purple glow-purple') : 'text-nq-text-muted hover:text-nq-text-secondary'}`}
-              >
-                {m.toUpperCase()}
-              </button>
-            ))}
-          </div>
           <StreakBadge size="sm" />
           <XPProgressBar compact />
           <Link to="/profile" className="w-10 h-10 rounded-full glass border border-nq-cyan/20 flex items-center justify-center overflow-hidden shrink-0 shadow-[0_0_18px_rgba(0,229,255,0.12)]">

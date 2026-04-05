@@ -1,15 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { useEffect, useState, type ReactNode } from "react";
-import type { Session, User as SupabaseUser } from "@supabase/supabase-js";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { XPFloat } from "@/components/game/XPFloat";
 import { LevelUpModal } from "@/components/game/LevelUpModal";
 import { useAuthStore } from "@/store/useAuthStore";
-import { useGameStore } from "@/store/gameStore";
+import { calculateBadgesStatus, useGameStore } from "@/store/gameStore";
 import { supabase } from "@/lib/supabase";
+import { BattleSocketProvider } from "@/hooks/BattleSocketProvider";
+import { buildUserDataFromSupabaseUser } from "@/lib/supabaseUser";
+import { syncProfileToDatabase } from "@/lib/profileApi";
 import { getLastActiveAvatarId } from "@/data/avatars";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
@@ -19,7 +22,6 @@ import ArticleView from "./pages/ArticleView";
 import QuizView from "./pages/QuizView";
 import PredictionView from "./pages/PredictionView";
 import Dashboard from "./pages/Dashboard";
-import QuestsPage from "./pages/QuestsPage";
 import Leaderboard from "./pages/Leaderboard";
 import Profile from "./pages/Profile";
 import UPSCMode from "./pages/UPSCMode";
@@ -30,38 +32,25 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
-const buildOauthUser = (authUser: SupabaseUser) => ({
-  id: authUser.id,
-  username:
-    authUser.user_metadata?.user_name ??
-    authUser.user_metadata?.full_name ??
-    authUser.email?.split('@')[0] ??
-    'player',
-  email: authUser.email ?? '',
-  joinDate: authUser.created_at ?? new Date().toISOString(),
-  avatarId: getLastActiveAvatarId() ?? 0,
-  avatarCustomization: { skinTone: 0, trailColor: 'cyan' },
-  currentLevel: 1,
-  totalXP: 25,
-  xpToNextLevel: 100,
-  streakCount: 0,
-  lastActiveDate: new Date().toISOString(),
-  interests: [],
-  dailyGoal: 5,
-  mode: 'both',
-  badges: ['Google Sign-In'],
-  articlesRead: 0,
-  quizzesTotal: 0,
-  quizzesCorrect: 0,
-  predictionsTotal: 0,
-  predictionsCorrect: 0,
-  battleRating: 1000,
-  battleTier: 'ROOKIE',
-  wins: 0,
-  losses: 0,
-  draws: 0,
-  recentForm: [],
-});
+const getUtcDay = (value?: string | null) => {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  return new Date(value).toISOString().slice(0, 10);
+};
+
+const getUtcYesterday = () => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+const calculateNextStreak = (lastActiveDate: string | null | undefined, currentStreak: number) => {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!lastActiveDate) return 1;
+  const lastDay = getUtcDay(lastActiveDate);
+  if (lastDay === today) return Math.max(1, currentStreak);
+  if (lastDay === getUtcYesterday()) return Math.max(1, currentStreak) + 1;
+  return 1;
+};
 
 const RequireAuth = ({ children }: { children: ReactNode }) => {
   const user = useAuthStore((s) => s.user);
@@ -69,7 +58,8 @@ const RequireAuth = ({ children }: { children: ReactNode }) => {
 };
 
 const PublicOnly = ({ children }: { children: ReactNode }) => {
-  return children;
+  const user = useAuthStore((s) => s.user);
+  return user ? <Navigate to="/home" replace /> : children;
 };
 
 const RootRedirect = () => {
@@ -96,9 +86,12 @@ const App = () => (
 
 const AppShell = () => {
   const login = useAuthStore((s) => s.login);
+  const logout = useAuthStore((s) => s.logout);
   const authUser = useAuthStore((s) => s.user);
   const currentUserId = useAuthStore((s) => s.user?.id);
   const [authReady, setAuthReady] = useState(false);
+  const lastProfileSyncSignature = useRef<string>("");
+  const lastStreakWriteKey = useRef<string>("");
 
   useEffect(() => {
     let active = true;
@@ -107,32 +100,79 @@ const AppShell = () => {
       if (!active) return;
 
       if (session?.user) {
-        const oauthUser = buildOauthUser(session.user);
-        if (oauthUser.id !== currentUserId) {
-          login(oauthUser);
-          useGameStore.setState((state) => ({
-            user: {
-              ...state.user,
-              id: oauthUser.id,
-              username: oauthUser.username,
-              currentLevel: oauthUser.currentLevel,
-              totalXP: oauthUser.totalXP,
-              xpToNextLevel: oauthUser.xpToNextLevel,
-              streakCount: oauthUser.streakCount,
-              lastActiveDate: oauthUser.lastActiveDate,
-              articlesRead: oauthUser.articlesRead,
-              quizzesTotal: oauthUser.quizzesTotal,
-              quizzesCorrect: oauthUser.quizzesCorrect,
-              predictionsTotal: oauthUser.predictionsTotal,
-              predictionsCorrect: oauthUser.predictionsCorrect,
-              avatarId: oauthUser.avatarId,
-              avatarBody: 'scout',
-              focusMode: 'both',
-              dailyTarget: oauthUser.dailyGoal,
-              onboarded: true,
-            },
-          }));
+        const oauthUser = buildUserDataFromSupabaseUser(session.user);
+
+        const now = new Date().toISOString();
+        const nextStreak = calculateNextStreak(oauthUser.lastActiveDate, oauthUser.streakCount);
+
+        const updatedOauthUser = {
+          ...oauthUser,
+          streakCount: nextStreak,
+          lastActiveDate: now,
+        };
+
+        const today = now.slice(0, 10);
+        const lastActiveDay = oauthUser.lastActiveDate ? getUtcDay(oauthUser.lastActiveDate) : null;
+        const shouldUpdateDailyStreak = lastActiveDay !== today;
+
+        // Write streak metadata only once per user/day to avoid auth update loops.
+        if (shouldUpdateDailyStreak) {
+          const streakWriteKey = `${updatedOauthUser.id}:${today}`;
+          if (lastStreakWriteKey.current !== streakWriteKey) {
+            lastStreakWriteKey.current = streakWriteKey;
+            void supabase.auth.updateUser({
+              data: {
+                streak_count: updatedOauthUser.streakCount,
+                last_active_date: updatedOauthUser.lastActiveDate,
+              },
+            }).catch(() => {
+              lastStreakWriteKey.current = "";
+            });
+          }
         }
+
+        const profileSyncSignature = [
+          updatedOauthUser.id,
+          updatedOauthUser.currentLevel,
+          updatedOauthUser.totalXP,
+          updatedOauthUser.streakCount,
+          getUtcDay(updatedOauthUser.lastActiveDate),
+        ].join(":");
+        if (lastProfileSyncSignature.current !== profileSyncSignature) {
+          lastProfileSyncSignature.current = profileSyncSignature;
+          void syncProfileToDatabase(updatedOauthUser).catch(() => {
+            lastProfileSyncSignature.current = "";
+          });
+        }
+
+        login(updatedOauthUser);
+        useGameStore.setState((state) => ({
+          user: {
+            ...state.user,
+            id: updatedOauthUser.id,
+            username: updatedOauthUser.username,
+            currentLevel: updatedOauthUser.currentLevel,
+            totalXP: updatedOauthUser.totalXP,
+            xpToNextLevel: updatedOauthUser.xpToNextLevel,
+            streakCount: updatedOauthUser.streakCount,
+            lastActiveDate: updatedOauthUser.lastActiveDate,
+            articlesRead: updatedOauthUser.articlesRead,
+            quizzesTotal: updatedOauthUser.quizzesTotal,
+            quizzesCorrect: updatedOauthUser.quizzesCorrect,
+            predictionsTotal: updatedOauthUser.predictionsTotal,
+            predictionsCorrect: updatedOauthUser.predictionsCorrect,
+            badges: calculateBadgesStatus(updatedOauthUser.totalXP, updatedOauthUser.badges),
+            avatarId: updatedOauthUser.avatarId,
+            avatarBody: "scout",
+            focusMode: "both",
+            dailyTarget: updatedOauthUser.dailyGoal,
+            onboarded: true,
+          },
+        }));
+      } else if (currentUserId) {
+        lastProfileSyncSignature.current = "";
+        lastStreakWriteKey.current = "";
+        logout();
       }
 
       setAuthReady(true);
@@ -150,7 +190,7 @@ const AppShell = () => {
       active = false;
       subscription.unsubscribe();
     };
-  }, [currentUserId, login]);
+  }, [currentUserId, login, logout]);
 
   useEffect(() => {
     if (!authUser) return;
@@ -170,9 +210,10 @@ const AppShell = () => {
         quizzesCorrect: authUser.quizzesCorrect,
         predictionsTotal: authUser.predictionsTotal,
         predictionsCorrect: authUser.predictionsCorrect,
+        badges: calculateBadgesStatus(authUser.totalXP, authUser.badges),
         avatarId: authUser.avatarId ?? getLastActiveAvatarId() ?? state.user.avatarId,
-        avatarBody: 'scout',
-        focusMode: 'both',
+        avatarBody: "scout",
+        focusMode: "both",
         dailyTarget: authUser.dailyGoal,
         onboarded: true,
       },
@@ -195,27 +236,28 @@ const AppShell = () => {
         <XPFloat />
         <LevelUpModal />
         <FeedBootstrap />
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<RootRedirect />} />
-            <Route path="/landing" element={<Landing />} />
-            <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
-            <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
-            <Route path="/home" element={<RequireAuth><HomeFeed /></RequireAuth>} />
-            <Route path="/article/:id" element={<RequireAuth><ArticleView /></RequireAuth>} />
-            <Route path="/quiz/:id" element={<RequireAuth><QuizView /></RequireAuth>} />
-            <Route path="/predict/:id" element={<RequireAuth><PredictionView /></RequireAuth>} />
-            <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
-            <Route path="/battle" element={<RequireAuth><BattleLobby /></RequireAuth>} />
-            <Route path="/battle/:id" element={<RequireAuth><BattleArena /></RequireAuth>} />
-            <Route path="/quests" element={<RequireAuth><QuestsPage /></RequireAuth>} />
-            <Route path="/leaderboard" element={<RequireAuth><Leaderboard /></RequireAuth>} />
-            <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
-            <Route path="/upsc" element={<RequireAuth><UPSCMode /></RequireAuth>} />
-            <Route path="/avatar-editor" element={<RequireAuth><AvatarEditor /></RequireAuth>} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
+        <BattleSocketProvider>
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <Routes>
+              <Route path="/" element={<RootRedirect />} />
+              <Route path="/landing" element={<Landing />} />
+              <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+              <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
+              <Route path="/home" element={<RequireAuth><HomeFeed /></RequireAuth>} />
+              <Route path="/article/:id" element={<RequireAuth><ArticleView /></RequireAuth>} />
+              <Route path="/quiz/:id" element={<RequireAuth><QuizView /></RequireAuth>} />
+              <Route path="/predict/:id" element={<RequireAuth><PredictionView /></RequireAuth>} />
+              <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
+              <Route path="/battle" element={<RequireAuth><BattleLobby /></RequireAuth>} />
+              <Route path="/battle/:id" element={<RequireAuth><BattleArena /></RequireAuth>} />
+              <Route path="/leaderboard" element={<RequireAuth><Leaderboard /></RequireAuth>} />
+              <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
+              <Route path="/upsc" element={<RequireAuth><UPSCMode /></RequireAuth>} />
+              <Route path="/avatar-editor" element={<RequireAuth><AvatarEditor /></RequireAuth>} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </BattleSocketProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );

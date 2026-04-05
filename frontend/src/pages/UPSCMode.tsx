@@ -1,4 +1,5 @@
 import { useGameStore } from '@/store/gameStore';
+import type { Article } from '@/store/gameStore';
 import { HUDBar } from '@/components/game/HUDBar';
 import { GlassCard } from '@/components/game/GlassCard';
 import { NewsCard } from '@/components/game/NewsCard';
@@ -8,7 +9,7 @@ import { BookOpen, Globe, Mountain, Leaf, Landmark, FlaskConical } from 'lucide-
 import { getUpscCompletedArticleIds } from '@/data/upscProgress';
 
 const subjects = [
-  { id: 'polity', name: 'Polity', icon: Landmark },
+  { id: 'polity', name: 'Politics', icon: Landmark },
   { id: 'economy', name: 'Economy', icon: Globe },
   { id: 'geography', name: 'Geography', icon: Mountain },
   { id: 'environment', name: 'Environment', icon: Leaf },
@@ -26,7 +27,7 @@ type SubjectFilter = {
 
 const subjectFilters: Record<string, SubjectFilter> = {
   polity: {
-    categories: ['Polity', 'Politics'],
+    categories: ['Politics', 'Polity'],
     keywords: ['politic', 'constitution', 'parliament', 'supreme court', 'bill', 'election', 'government', 'policy', 'cabinet', 'federal', 'ministry', 'lok sabha', 'rajya sabha', 'election commission'],
     excludedKeywords: ['budget', 'inflation', 'gdp', 'market', 'stock', 'rbi', 'interest rate', 'space', 'wildlife', 'heritage'],
     minScore: 35,
@@ -69,7 +70,7 @@ const subjectFilters: Record<string, SubjectFilter> = {
   },
 };
 
-const scoreSubjectArticle = (article: { headline: string; summary: string; fullContent: string; category: string }, filter: SubjectFilter) => {
+const scoreSubjectArticle = (article: Pick<Article, 'headline' | 'summary' | 'fullContent' | 'category'>, filter: SubjectFilter) => {
   const headline = article.headline.toLowerCase();
   const summary = article.summary.toLowerCase();
   const content = article.fullContent.toLowerCase();
@@ -103,7 +104,7 @@ const scoreSubjectArticle = (article: { headline: string; summary: string; fullC
 };
 
 const filterAndSortSubjectArticles = (
-  articles: { headline: string; summary: string; fullContent: string; category: string; publishedAt: string }[],
+  articles: Article[],
   filter: SubjectFilter,
 ) => {
   return [...articles]

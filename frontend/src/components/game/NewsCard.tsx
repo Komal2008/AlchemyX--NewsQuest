@@ -15,6 +15,7 @@ const categoryColors: Record<string, string> = {
   Environment: 'bg-nq-green/20 text-nq-green',
   Economy: 'bg-nq-orange/20 text-nq-orange',
   Science: 'bg-nq-purple/20 text-nq-purple',
+  Politics: 'bg-nq-cyan/20 text-nq-cyan',
   Polity: 'bg-nq-cyan/20 text-nq-cyan',
 };
 

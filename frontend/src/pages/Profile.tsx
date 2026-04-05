@@ -7,12 +7,17 @@ import { ActivityHeatmap } from '@/components/game/ActivityHeatmap';
 import { StreakBadge } from '@/components/game/StreakBadge';
 import { AvatarVisual } from '@/components/game/AvatarVisual';
 import { getAvatarLabel } from '@/data/avatars';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/useAuthStore';
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
-import { ArrowRightLeft } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRightLeft, LogOut } from 'lucide-react';
 
 const Profile = () => {
   const user = useGameStore(s => s.user);
+  const authUser = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+  const navigate = useNavigate();
   const quizAcc = user.quizzesTotal > 0 ? Math.round((user.quizzesCorrect / user.quizzesTotal) * 100) : 0;
   const predAcc = user.predictionsTotal > 0 ? Math.round((user.predictionsCorrect / user.predictionsTotal) * 100) : 0;
   const earnedBadges = user.badges.filter((badge) => badge.earned).length;
@@ -25,6 +30,18 @@ const Profile = () => {
       <div className="pt-[76px] pb-20 md:pb-8 max-w-6xl mx-auto px-4">
         <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(0,229,255,0.12),transparent_34%),radial-gradient(circle_at_top_right,rgba(124,58,237,0.14),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-4 md:p-6 mb-6 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
           <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(135deg,rgba(255,255,255,0.05)_0%,transparent_30%,transparent_70%,rgba(0,229,255,0.06)_100%)]" />
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={async () => {
+              await supabase.auth.signOut();
+              logout();
+              navigate('/login', { replace: true });
+            }}
+            className="absolute right-4 top-4 z-10 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-2 text-[10px] font-space-mono uppercase tracking-[0.22em] text-nq-text-secondary transition-colors hover:border-auth-error/40 hover:text-auth-error"
+          >
+            <LogOut size={13} />
+            Logout
+          </motion.button>
           <div className="relative grid lg:grid-cols-[1.15fr_0.85fr] gap-4">
             <GlassCard hover={false} glow="cyan" className="relative overflow-hidden border border-nq-cyan/20 bg-black/15 p-6 md:p-8">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(0,229,255,0.12),transparent_35%)] pointer-events-none" />
@@ -101,7 +118,7 @@ const Profile = () => {
         </div>
 
         <div className="grid grid-cols-1 gap-6 mb-6">
-          <GlassCard hover={false} glow="cyan" className="p-4 md:p-5 pb-3 md:pb-4">
+          <GlassCard hover={false} glow="cyan" className="p-5 md:p-6">
             <div className="flex items-center justify-between gap-4 mb-2">
               <div>
                 <h3 className="font-display text-xs font-bold text-nq-text-secondary">ACTIVITY</h3>
@@ -111,8 +128,8 @@ const Profile = () => {
                 {user.streakCount} day streak
               </div>
             </div>
-            <div className="w-full -mb-1">
-              <ActivityHeatmap />
+            <div className="w-full">
+              <ActivityHeatmap userId={authUser?.id ?? user.id} cellSize={14} />
             </div>
           </GlassCard>
         </div>

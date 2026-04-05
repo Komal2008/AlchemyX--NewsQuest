@@ -3,11 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Swords, Flame, Zap, Home, RotateCcw } from 'lucide-react';
 import ParticleBg from '@/components/ParticleBg';
-import { AvatarVisual } from '@/components/game/AvatarVisual';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useBattleStore, type RoundResult } from '@/store/useBattleStore';
+import { useBattleStore, type RoundResult, type Opponent } from '@/store/useBattleStore';
+import { useBattleSocketContext } from '@/hooks/BattleSocketProvider';
 import { getQuestionsForBattle } from '@/data/battleQuestions';
 import type { BattleQuestion } from '@/data/battleQuestions';
+import { recordBattleProgress } from '@/lib/progressSync';
+
+const AVATAR_EMOJIS = ['🏃', '🧠', '🔮', '⚡', '👻'];
 
 /* ── HP Bar ── */
 const HPBar = ({ hp, max, side }: { hp: number; max: number; side: 'player' | 'opponent' }) => {
@@ -106,11 +109,10 @@ const AnswerOption = ({
       whileTap={!isDisabled ? { scale: 0.98 } : {}}
       className={`w-full glass p-4 flex items-center gap-4 transition-all border-2 ${borderClass} ${bgClass} ${isDisabled ? 'cursor-default opacity-70' : 'cursor-pointer hover:border-primary/50'}`}
     >
-      <span className={`w-9 h-9 rounded-full flex items-center justify-center font-orbitron text-sm font-bold border-2 flex-shrink-0 ${
-        isRevealed && isCorrect ? 'bg-battle-gold text-primary-foreground border-battle-gold' :
+      <span className={`w-9 h-9 rounded-full flex items-center justify-center font-orbitron text-sm font-bold border-2 flex-shrink-0 ${isRevealed && isCorrect ? 'bg-battle-gold text-primary-foreground border-battle-gold' :
         isRevealed && isSelected ? 'bg-battle-red text-primary-foreground border-battle-red' :
-        isSelected ? 'bg-battle-blue text-primary-foreground border-battle-blue' : 'border-muted-foreground text-muted-foreground'
-      }`}>
+          isSelected ? 'bg-battle-blue text-primary-foreground border-battle-blue' : 'border-muted-foreground text-muted-foreground'
+        }`}>
         {option.icon || letters[index] || option.id}
       </span>
       <span className="font-plex text-sm text-left flex-1">{option.text}</span>
@@ -125,7 +127,7 @@ const AnswerOption = ({
 const ConfidenceSlider = ({ value, onChange, locked }: { value: number; onChange: (v: number) => void; locked: boolean }) => {
   const label = value <= 30 ? 'Just a guess — low risk, low reward' :
     value <= 60 ? 'Moderate confidence — balanced play' :
-    value <= 85 ? 'High confidence — big stakes' : 'ALL IN — maximum risk and reward';
+      value <= 85 ? 'High confidence — big stakes' : 'ALL IN — maximum risk and reward';
   const potentialReward = Math.round(20 * (value / 50));
 
   return (
@@ -194,21 +196,21 @@ const PreBattleCountdown = ({ onComplete, playerAvatar, opponentAvatar, mode, pl
             <motion.div
               initial={{ x: '-100vw' }} animate={{ x: '-25vw' }}
               transition={{ duration: 1.2, type: 'spring', bounce: 0.3 }}
-              className="absolute drop-shadow-[0_0_20px_rgba(0,229,255,0.35)]"
+              className="absolute text-8xl lg:text-9xl drop-shadow-[0_0_20px_rgba(0,229,255,0.35)]"
             >
-              <div className="relative w-28 h-28 lg:w-36 lg:h-36 flex items-center justify-center">
+              <div className="relative">
                 <div className="absolute inset-0 rounded-full border border-battle-blue/30 blur-md" />
-                <AvatarVisual avatarId={playerAvatar} className="text-8xl lg:text-9xl" imageClassName="w-28 h-28 lg:w-36 lg:h-36" />
+                {AVATAR_EMOJIS[playerAvatar]}
               </div>
             </motion.div>
             <motion.div
               initial={{ x: '100vw' }} animate={{ x: '25vw' }}
               transition={{ duration: 1.2, type: 'spring', bounce: 0.3 }}
-              className="absolute drop-shadow-[0_0_20px_rgba(255,34,68,0.35)]"
+              className="absolute text-8xl lg:text-9xl drop-shadow-[0_0_20px_rgba(255,34,68,0.35)]"
             >
-              <div className="relative w-28 h-28 lg:w-36 lg:h-36 flex items-center justify-center">
+              <div className="relative">
                 <div className="absolute inset-0 rounded-full border border-battle-red/30 blur-md" />
-                <AvatarVisual avatarId={opponentAvatar} className="text-8xl lg:text-9xl" imageClassName="w-28 h-28 lg:w-36 lg:h-36" />
+                {AVATAR_EMOJIS[opponentAvatar]}
               </div>
             </motion.div>
           </>
@@ -309,9 +311,8 @@ const BattleEndScreen = ({ result, playerScore, opponentScore, playerHP, opponen
           transition={{ type: 'spring', bounce: 0.4 }}
           className="text-center space-y-4 relative z-10"
         >
-          <h1 className={`font-orbitron text-7xl lg:text-9xl font-black ${
-            result === 'win' ? 'text-auth-success' : result === 'loss' ? 'text-battle-red' : 'text-foreground'
-          }`} style={{ textShadow: result === 'win' ? '0 0 60px hsl(153 100% 50% / 0.55)' : result === 'loss' ? '0 0 60px hsl(349 100% 61% / 0.55)' : 'none' }}>
+          <h1 className={`font-orbitron text-7xl lg:text-9xl font-black ${result === 'win' ? 'text-auth-success' : result === 'loss' ? 'text-battle-red' : 'text-foreground'
+            }`} style={{ textShadow: result === 'win' ? '0 0 60px hsl(153 100% 50% / 0.55)' : result === 'loss' ? '0 0 60px hsl(349 100% 61% / 0.55)' : 'none' }}>
             {result === 'win' ? 'VICTORY' : result === 'loss' ? 'DEFEATED' : 'DRAW'}
           </h1>
           {result === 'win' && (
@@ -329,9 +330,8 @@ const BattleEndScreen = ({ result, playerScore, opponentScore, playerHP, opponen
         >
           <div className="text-center">
             <h2 className="font-orbitron text-xl text-gradient-cyan">BATTLE COMPLETE</h2>
-            <span className={`inline-block mt-2 px-4 py-1 rounded-full text-sm font-orbitron ${
-              result === 'win' ? 'bg-auth-success/20 text-auth-success' : result === 'loss' ? 'bg-battle-red/20 text-battle-red' : 'bg-muted text-foreground'
-            }`}>{result === 'win' ? 'VICTORY' : result === 'loss' ? 'DEFEAT' : 'DRAW'}</span>
+            <span className={`inline-block mt-2 px-4 py-1 rounded-full text-sm font-orbitron ${result === 'win' ? 'bg-auth-success/20 text-auth-success' : result === 'loss' ? 'bg-battle-red/20 text-battle-red' : 'bg-muted text-foreground'
+              }`}>{result === 'win' ? 'VICTORY' : result === 'loss' ? 'DEFEAT' : 'DRAW'}</span>
           </div>
 
           <div className="space-y-3">
@@ -349,9 +349,8 @@ const BattleEndScreen = ({ result, playerScore, opponentScore, playerHP, opponen
               </motion.div>
             ))}
             <motion.div initial={{ x: -30, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.6 }}
-              className={`flex justify-between items-center glass px-4 py-4 border-2 rounded-2xl ${
-                result === 'win' ? 'border-auth-success/30 glow-green' : 'border-primary/30 glow-cyan'
-              }`}
+              className={`flex justify-between items-center glass px-4 py-4 border-2 rounded-2xl ${result === 'win' ? 'border-auth-success/30 glow-green' : 'border-primary/30 glow-cyan'
+                }`}
             >
               <span className={`text-xs font-space-mono uppercase ${result === 'win' ? 'text-auth-success' : 'text-primary'}`}>Total XP Earned</span>
               <span className={`font-orbitron text-2xl ${result === 'win' ? 'text-auth-success' : 'text-primary'}`}>+{xpEarned} XP 🔥</span>
@@ -393,9 +392,47 @@ const MomentumOverlay = ({ side }: { side: 'player' | 'opponent' }) => (
    ════════════════════════════════════════════════════════════════ */
 const BattleArena = () => {
   const navigate = useNavigate();
+  const { id } = useParams<{ id?: string }>();
   const user = useAuthStore((s) => s.user);
-  const updateUser = useAuthStore((s) => s.updateUser);
   const battle = useBattleStore();
+  const battleId = battle.battleId;
+  const battleMode = battle.mode;
+  const battleOpponent = battle.opponent;
+  const battleQuestions = battle.questions;
+  const battleCurrentQuestion = battle.currentQuestion;
+  const battlePlayerAnswered = battle.playerAnswered;
+  const battleOpponentAnswered = battle.opponentAnswered;
+  const battlePlayerAnswer = battle.playerAnswer;
+  const battleOpponentAnswer = battle.opponentAnswer;
+  const battlePlayerConfidence = battle.playerConfidence;
+  const battleOpponentConfidence = battle.opponentConfidence;
+  const battlePlayerHP = battle.playerHP;
+  const battleOpponentHP = battle.opponentHP;
+  const battlePlayerScore = battle.playerScore;
+  const battleOpponentScore = battle.opponentScore;
+  const battleTimeRemaining = battle.timeRemaining;
+  const battleTimerSpeed = battle.timerSpeed;
+  const battleStatus = battle.status;
+  const battleIsOnFire = battle.isOnFire;
+  const battleOpponentOnFire = battle.opponentOnFire;
+  const battleSetTimeRemaining = battle.setTimeRemaining;
+  const battleLockInOpponentAnswer = battle.lockInOpponentAnswer;
+  const battleSetOpponentConfidence = battle.setOpponentConfidence;
+  const battleSetPlayerConfidence = battle.setPlayerConfidence;
+  const battleNextQuestion = battle.nextQuestion;
+  const battleApplyRoundResult = battle.applyRoundResult;
+  const battleEndBattle = battle.endBattle;
+  const battleReset = battle.reset;
+  const battleStartGame = battle.startGame;
+  const battleSetStatus = battle.setStatus;
+  const battleSetMode = battle.setMode;
+  const battleSetBattleId = battle.setBattleId;
+  const battleSetOpponent = battle.setOpponent;
+  const battleSetCategories = battle.setCategories;
+  const battleSetTimerSpeed = battle.setTimerSpeed;
+  const battleLockInAnswer = battle.lockInAnswer;
+  const { battleRoom, incomingChallenge, lastBattleAction, timerSync, joinBattleRoom, sendBattleAction, respondToChallenge, clearBattleRoom, socketConnected } = useBattleSocketContext();
+  const [opponentProgress, setOpponentProgress] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const currentQ = battle.questions[battle.currentQuestion] as BattleQuestion | undefined;
@@ -404,26 +441,59 @@ const BattleArena = () => {
   const [revealPhase, setRevealPhase] = useState<'idle' | 'revealing' | 'explanation'>('idle');
   const [showPreBattle, setShowPreBattle] = useState(true);
 
-  // Redirect if no battle data
   useEffect(() => {
-    if (!battle.opponent || !battle.mode) {
-      navigate('/battle');
+    const roomId = battleId || id;
+    if (!roomId || !socketConnected) return;
+    joinBattleRoom(roomId);
+  }, [battleId, id, joinBattleRoom, socketConnected]);
+
+  useEffect(() => {
+    if (battleRoom && user) {
+      const hasBattleState = battleMode && battleOpponent && battleQuestions.length > 0;
+      if (!hasBattleState) {
+        const opponentPlayer = battleRoom.players.find((player) => player.id !== user.id) || battleRoom.players[0];
+        if (opponentPlayer) {
+          battleSetMode(battleRoom.mode);
+          battleSetBattleId(battleRoom.roomId);
+          battleSetOpponent(opponentPlayer as Opponent);
+          battleStartGame(battleRoom.questions);
+          battleSetStatus('pre_battle');
+        }
+      }
     }
-  }, [battle.opponent, battle.mode, navigate]);
+  }, [battleRoom, user, battleMode, battleOpponent, battleQuestions.length, battleSetMode, battleSetBattleId, battleSetOpponent, battleStartGame, battleSetStatus]);
+
+  useEffect(() => {
+    if (!timerSync || timerSync.roomId !== battleId) return;
+    battleSetTimeRemaining(timerSync.timeRemaining);
+  }, [timerSync, battleId, battleSetTimeRemaining]);
+
+  useEffect(() => {
+    if (!lastBattleAction || lastBattleAction.roomId !== battleId) return;
+    if (lastBattleAction.type === 'answer' && lastBattleAction.questionIndex === battleCurrentQuestion) {
+      battleLockInOpponentAnswer(lastBattleAction.answer || '');
+      if (currentQ?.type === 'prediction' && typeof lastBattleAction.confidence === 'number') {
+        battleSetOpponentConfidence(lastBattleAction.confidence);
+      }
+    }
+    if (lastBattleAction.type === 'progress' && typeof lastBattleAction.progress === 'number') {
+      setOpponentProgress(lastBattleAction.progress);
+    }
+  }, [lastBattleAction, battleId, battleCurrentQuestion, currentQ, battleLockInOpponentAnswer, battleSetOpponentConfidence]);
 
   // Start timer when active
   useEffect(() => {
-    if (battle.status !== 'active' || revealPhase !== 'idle') return;
+    if (battleStatus !== 'active' || revealPhase !== 'idle') return;
     timerRef.current = setInterval(() => {
-      battle.setTimeRemaining(Math.max(0, battle.timeRemaining - 1));
+      battle.setTimeRemaining(Math.max(0, battleTimeRemaining - 1));
     }, 1000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [battle.status, battle.currentQuestion, revealPhase]);
+  }, [battleStatus, battleCurrentQuestion, revealPhase, battleTimeRemaining]);
 
   // Simulate opponent answer
   useEffect(() => {
-    if (battle.status !== 'active' || !currentQ || battle.opponentAnswered || revealPhase !== 'idle') return;
-    const opp = battle.opponent;
+    if (battleStatus !== 'active' || !currentQ || battleOpponentAnswered || revealPhase !== 'idle' || !!battleId) return;
+    const opp = battleOpponent;
     if (!opp) return;
     const delay = (battle.timerSpeed * 0.3 + Math.random() * battle.timerSpeed * 0.4) * 1000;
     const t = setTimeout(() => {
@@ -438,25 +508,6 @@ const BattleArena = () => {
     }, delay);
     return () => clearTimeout(t);
   }, [battle.status, battle.currentQuestion, battle.opponentAnswered, revealPhase]);
-
-  // Both answered → reveal
-  useEffect(() => {
-    if (battle.status !== 'active') return;
-    if ((battle.playerAnswered && battle.opponentAnswered) || battle.timeRemaining <= 0) {
-      if (revealPhase === 'idle') {
-        if (timerRef.current) clearInterval(timerRef.current);
-        handleReveal();
-      }
-    }
-  }, [battle.playerAnswered, battle.opponentAnswered, battle.timeRemaining]);
-
-  const handlePlayerAnswer = useCallback((answerId: string) => {
-    if (battle.playerAnswered || revealPhase !== 'idle') return;
-    battle.lockInAnswer(answerId);
-    if (isPrediction) {
-      setShowConfidence(true);
-    }
-  }, [battle.playerAnswered, revealPhase, isPrediction]);
 
   const handleReveal = useCallback(() => {
     if (!currentQ) return;
@@ -498,6 +549,17 @@ const BattleArena = () => {
     }, 1500);
   }, [currentQ, battle, isPrediction]);
 
+  // Both answered → reveal
+  useEffect(() => {
+    if (battleStatus !== 'active') return;
+    if ((battlePlayerAnswered && battleOpponentAnswered) || battleTimeRemaining <= 0) {
+      if (revealPhase === 'idle') {
+        if (timerRef.current) clearInterval(timerRef.current);
+        handleReveal();
+      }
+    }
+  }, [battleStatus, battlePlayerAnswered, battleOpponentAnswered, battleTimeRemaining, revealPhase, handleReveal]);
+
   const handleNextOrEnd = useCallback(() => {
     setRevealPhase('idle');
     const isLast = battle.currentQuestion >= battle.totalQuestions - 1;
@@ -513,33 +575,67 @@ const BattleArena = () => {
       else if (battle.playerHP < battle.opponentHP) result = 'loss';
       else result = 'draw';
 
-      const xp = Math.max(10, battle.playerScore * 15 + (result === 'win' ? 50 : result === 'draw' ? 20 : 5));
-      const br = result === 'win' ? Math.floor(20 + Math.random() * 30) : result === 'loss' ? -Math.floor(10 + Math.random() * 20) : 0;
+      const xp = result === 'win'
+        ? Math.max(10, battle.playerScore * 15 + 50)
+        : result === 'draw'
+          ? 0
+          : -Math.max(5, Math.round(battle.opponentScore * 5));
+      const br = result === 'win'
+        ? Math.floor(20 + Math.random() * 30)
+        : result === 'loss'
+          ? -Math.floor(10 + Math.random() * 20)
+          : 0;
       battle.endBattle(result, xp, br);
 
-      // Update user stats
-      if (user) {
-        updateUser({
-          totalXP: user.totalXP + xp,
-          battleRating: Math.max(0, user.battleRating + br),
-          wins: user.wins + (result === 'win' ? 1 : 0),
-          losses: user.losses + (result === 'loss' ? 1 : 0),
-          draws: user.draws + (result === 'draw' ? 1 : 0),
-        });
-      }
+      recordBattleProgress(result, xp, br);
     } else {
       battle.nextQuestion();
     }
-  }, [battle, user, updateUser]);
+  }, [battle]);
+
+  const handlePlayerAnswer = useCallback((answerId: string) => {
+    if (battlePlayerAnswered || revealPhase !== 'idle') return;
+    battleLockInAnswer(answerId);
+    if (battleId) {
+      sendBattleAction(battleId, 'answer', {
+        questionIndex: battleCurrentQuestion,
+        answer: answerId,
+        confidence: battlePlayerConfidence,
+      });
+    }
+    if (isPrediction) {
+      setShowConfidence(true);
+    }
+  }, [battlePlayerAnswered, revealPhase, battleLockInAnswer, battleId, sendBattleAction, battleCurrentQuestion, battlePlayerConfidence, isPrediction]);
 
   const handleTimeout = useCallback(() => {
-    if (revealPhase === 'idle' && battle.status === 'active') {
-      if (!battle.playerAnswered) battle.lockInAnswer('');
-      if (!battle.opponentAnswered) battle.lockInOpponentAnswer(currentQ?.correctAnswer || '');
+    if (revealPhase !== 'idle' || battle.status !== 'active') return;
+    if (!battle.playerAnswered) {
+      battle.lockInAnswer('');
+      if (battleId) {
+        sendBattleAction(battleId, 'answer', {
+          questionIndex: battleCurrentQuestion,
+          answer: '',
+          confidence: isPrediction ? 0 : undefined,
+        });
+      }
     }
-  }, [revealPhase, battle, currentQ]);
+    if (!battle.opponentAnswered && !battleId) {
+      battle.lockInOpponentAnswer(currentQ?.correctAnswer || '');
+    }
+  }, [revealPhase, battle, currentQ, battleId, sendBattleAction, battleCurrentQuestion, isPrediction]);
 
-  if (!user || !battle.opponent || !battle.mode) return null;
+  if (!user) return null;
+  if (!battle.opponent || !battle.mode) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-white px-4">
+        <div className="glass p-8 rounded-3xl border border-border/40 text-center shadow-lg max-w-md">
+          <p className="text-xl font-semibold">Joining battle...</p>
+          <p className="mt-3 text-sm text-muted-foreground">Waiting for the opponent and battle data to load.</p>
+        </div>
+      </div>
+    );
+  }
 
   // Pre-battle countdown
   if (showPreBattle) {
@@ -574,13 +670,48 @@ const BattleArena = () => {
           battle.startGame(qs);
           setShowPreBattle(true);
         }}
-        onExit={() => { battle.reset(); navigate('/battle'); }}
+        onExit={() => {
+          battle.reset();
+          clearBattleRoom();
+          navigate('/battle');
+        }}
       />
     );
   }
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-nq-void grain-overlay">
+      <AnimatePresence>
+        {incomingChallenge && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 grid place-items-center bg-black/70 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="glass p-6 max-w-md w-full space-y-4 border border-white/10 rounded-3xl"
+            >
+              <p className="text-sm text-white/60 uppercase tracking-[0.35em]">Incoming Challenge</p>
+              <h3 className="font-orbitron text-xl text-white">{incomingChallenge.from.username} challenged you to a battle</h3>
+              <p className="text-sm text-white/70">Mode: {incomingChallenge.mode.toUpperCase()} • Category: {incomingChallenge.category}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => respondToChallenge(incomingChallenge.challengeId, false)}
+                  className="flex-1 h-12 rounded-2xl glass text-sm font-medium text-white/80 border border-white/10"
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={() => respondToChallenge(incomingChallenge.challengeId, true)}
+                  className="flex-1 h-12 rounded-2xl bg-battle-blue text-white text-sm font-medium"
+                >
+                  Accept
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <ParticleBg color={battle.status === 'active' ? '#00E5FF' : '#FF2244'} count={40} />
 
       <div className="absolute inset-0 pointer-events-none">
@@ -615,7 +746,7 @@ const BattleArena = () => {
         <div className="flex items-center justify-between px-3 lg:px-6 py-3">
           {/* Player side */}
           <div className="flex items-center gap-3">
-            <AvatarVisual avatarId={user.avatarId} className="text-2xl lg:text-3xl" imageClassName="w-8 h-8 lg:w-10 lg:h-10" />
+            <span className="text-2xl lg:text-3xl">{AVATAR_EMOJIS[user.avatarId]}</span>
             <div className="hidden sm:block">
               <p className="font-orbitron text-xs text-battle-blue uppercase tracking-wider">{user.username}</p>
               <HPBar hp={battle.playerHP} max={100} side="player" />
@@ -639,7 +770,7 @@ const BattleArena = () => {
               <p className="font-orbitron text-xs text-battle-red uppercase tracking-wider">{battle.opponent.username}</p>
               <HPBar hp={battle.opponentHP} max={100} side="opponent" />
             </div>
-            <AvatarVisual avatarId={battle.opponent.avatarId} className="text-2xl lg:text-3xl" imageClassName="w-8 h-8 lg:w-10 lg:h-10" />
+            <span className="text-2xl lg:text-3xl">{AVATAR_EMOJIS[battle.opponent.avatarId]}</span>
           </div>
         </div>
 
@@ -667,9 +798,8 @@ const BattleArena = () => {
               <div className="glass p-5 lg:p-6 space-y-3 border border-nq-cyan/15 shadow-[0_0_40px_rgba(0,229,255,0.08)] relative overflow-hidden">
                 <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-battle-blue via-battle-gold to-battle-red opacity-80" />
                 <div className="flex items-center gap-3">
-                  <span className={`w-8 h-8 rounded-full flex items-center justify-center font-orbitron text-xs font-bold border ${
-                    currentQ.type === 'quiz' ? 'bg-battle-blue/15 text-battle-blue border-battle-blue/30' : 'bg-battle-gold/15 text-battle-gold border-battle-gold/30'
-                  }`}>
+                  <span className={`w-8 h-8 rounded-full flex items-center justify-center font-orbitron text-xs font-bold border ${currentQ.type === 'quiz' ? 'bg-battle-blue/15 text-battle-blue border-battle-blue/30' : 'bg-battle-gold/15 text-battle-gold border-battle-gold/30'
+                    }`}>
                     {currentQ.type === 'quiz' ? <Zap className="w-4 h-4" /> : '🔮'}
                   </span>
                   <span className="text-[10px] font-space-mono uppercase text-muted-foreground">{currentQ.category} • {currentQ.type === 'quiz' ? currentQ.difficulty : 'Prediction'}</span>

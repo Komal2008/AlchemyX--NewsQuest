@@ -54,6 +54,9 @@ const extractKeyTerms = (text: string) => {
   return Array.from(new Set(terms)).slice(0, 6);
 };
 
+const extractNumberClues = (text: string) =>
+  Array.from(new Set((text.match(/\b\d+(?:\.\d+)?%?\b/g) ?? []).map((value) => value.trim()))).slice(0, 6);
+
 const pickTopic = (article: NewsArticleInput) => {
   const sourceText = `${article.headline} ${article.summary} ${article.category}`.toLowerCase();
   if (sourceText.includes('ai') || sourceText.includes('artificial intelligence') || sourceText.includes('neural')) return 'AI';
@@ -71,13 +74,125 @@ const futureDate = (daysAhead: number) => {
   return date.toISOString().slice(0, 10);
 };
 
-const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim();
+const seenQuestionTexts = new Set<string>();
+const QUESTION_CACHE_LIMIT = 120;
+const seenPredictionTexts = new Set<string>();
+const PREDICTION_CACHE_LIMIT = 120;
 
-const countWords = (value: string) => normalizeText(value).split(/\s+/).filter(Boolean).length;
+const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim();
 
 const toExactWordCount = (text: string, targetWords: number) => {
   const words = normalizeText(text).split(/\s+/).filter(Boolean);
   return words.slice(0, targetWords).join(' ');
+};
+
+const toExactWordCountFromSources = (primary: string, fallbackSources: string[], targetWords: number) => {
+  const baseWords = normalizeText(primary).split(/\s+/).filter(Boolean);
+  if (baseWords.length >= targetWords) {
+    return baseWords.slice(0, targetWords).join(' ');
+  }
+
+  const fallbackWords = fallbackSources
+    .map((value) => normalizeText(value))
+    .filter(Boolean)
+    .join(' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!fallbackWords.length) return baseWords.join(' ');
+
+  const words = [...baseWords];
+  let cursor = 0;
+  while (words.length < targetWords) {
+    words.push(fallbackWords[cursor % fallbackWords.length]);
+    cursor += 1;
+  }
+  return words.slice(0, targetWords).join(' ');
+};
+
+const hashString = (value: string) => {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+};
+
+const buildOptionSet = (correct: string, distractors: string[], seed: string) => {
+  const deduped = Array.from(new Set(
+    distractors
+      .map((entry) => normalizeText(entry))
+      .filter((entry) => entry.length > 0 && entry.toLowerCase() !== normalizeText(correct).toLowerCase()),
+  ));
+
+  while (deduped.length < 3) {
+    deduped.push(`Alternative interpretation ${deduped.length + 1}`);
+  }
+
+  const options = [normalizeText(correct), ...deduped.slice(0, 3)];
+  const rotation = hashString(seed) % options.length;
+  const rotated = [...options.slice(rotation), ...options.slice(0, rotation)];
+  return {
+    options: rotated,
+    correctIndex: rotated.findIndex((entry) => entry === normalizeText(correct)),
+  };
+};
+
+const getQuestionKey = (question: string) => normalizeText(question).toLowerCase();
+
+const reserveQuestionText = (question: string) => {
+  const key = getQuestionKey(question);
+  if (seenQuestionTexts.has(key)) return false;
+  seenQuestionTexts.add(key);
+  if (seenQuestionTexts.size > QUESTION_CACHE_LIMIT) {
+    const oldest = seenQuestionTexts.values().next().value as string | undefined;
+    if (oldest) seenQuestionTexts.delete(oldest);
+  }
+  return true;
+};
+
+const reservePredictionText = (question: string) => {
+  const key = getQuestionKey(question);
+  if (seenPredictionTexts.has(key)) return false;
+  seenPredictionTexts.add(key);
+  if (seenPredictionTexts.size > PREDICTION_CACHE_LIMIT) {
+    const oldest = seenPredictionTexts.values().next().value as string | undefined;
+    if (oldest) seenPredictionTexts.delete(oldest);
+  }
+  return true;
+};
+
+const buildContentPrediction = (article: NewsArticleInput): GeneratedPredictionItem => {
+  const topic = pickTopic(article);
+  const terms = extractKeyTerms(`${article.headline} ${article.summary} ${article.fullContent}`);
+  const primary = terms[0] ?? topic;
+  const secondary = terms[1] ?? primary;
+  const tertiary = terms[2] ?? secondary;
+  const seed = `${article.headline}|${article.summary}|${article.category}|prediction`;
+
+  const templates = [
+    `Which interpretation is best supported by this article's details on ${primary}?`,
+    `Based on the report, what is the strongest evidence-backed takeaway about ${primary} and ${secondary}?`,
+    `From the article content, which statement most closely matches the described ${topic.toLowerCase()} situation?`,
+    `According to this article, what appears most consistent with the reported relationship between ${primary} and ${tertiary}?`,
+  ];
+
+  const baseQuestion = templates[hashString(seed) % templates.length];
+  const question = reservePredictionText(baseQuestion) ? baseQuestion : `${baseQuestion} (${article.category || topic})`;
+  const baseOptions = [
+    `The report links ${primary} to a concrete shift involving ${secondary}`,
+    `The article states ${primary} had no connection to ${secondary}`,
+    `The update is framed as unrelated to ${topic.toLowerCase()} and purely historical`,
+  ];
+  const rotation = hashString(`${seed}|pred-options`) % baseOptions.length;
+  const options = [...baseOptions.slice(rotation), ...baseOptions.slice(0, rotation)];
+
+  return {
+    question,
+    options,
+    deadline: futureDate(30),
+    xpReward: 25,
+  };
 };
 
 const buildFastHeadline = (article: NewsArticleInput) => {
@@ -89,106 +204,209 @@ const buildFastHeadline = (article: NewsArticleInput) => {
   return `${topic}: ${trimmed}`;
 };
 
-const buildSummaryPadding = (article: NewsArticleInput) => {
-  const headline = normalizeText(article.headline);
-  const summary = normalizeText(article.summary);
-  const content = normalizeText(article.fullContent);
-  const topic = pickTopic(article).toLowerCase();
-  const terms = extractKeyTerms(`${article.headline} ${article.summary} ${article.fullContent}`);
-  const primary = terms[0] ?? topic;
-  const secondary = terms[1] ?? primary;
-  const tertiary = terms[2] ?? secondary;
-  const source = normalizeText(article.source || 'the original report');
-  const published = normalizeText(article.publishedAt || 'recently');
-
-  return [
-    `The story begins with ${headline || 'a developing news update'} and the immediate details already suggest that the report has wider consequences than a simple headline might imply. The people, institutions, or events named in the article matter because they help define the scale of the update and show whether the change is isolated or part of a longer pattern. That distinction is important for readers who want to understand not just what happened, but why the event is being covered now.`,
-    `${summary || headline || 'The article summary'} provides the core facts, but the broader meaning comes from how those facts connect to ${primary}. When a report moves through public conversation, policy, markets, or day-to-day decisions, the context becomes just as important as the announcement itself. Readers should pay attention to what changed, what remained uncertain, and which parts of the story still need confirmation from later reporting.`,
-    `Additional detail from ${source} and the rest of the available reporting helps show the timeline more clearly. The publication date of ${published} places the news in a specific moment, which matters because fast-moving stories can shift quickly after new statements, official reactions, or follow-up data. That is why NewsQuest expands the summary: a longer explanation gives readers enough information to understand the story before they even open the full article.`,
-    `Another useful way to read the update is to look at the relationship between ${primary}, ${secondary}, and ${tertiary}. Those signals often reveal whether the story is about a one-time event, an ongoing dispute, or the early stage of a bigger development. If the article is about politics, economics, science, health, or technology, those connections help explain the practical effects, the likely response from stakeholders, and the questions that will matter in the next round of coverage.`,
-    `${content ? `The underlying report also contains language and context that can deepen the reader's understanding. ${content.slice(0, 900)}` : 'Even when the source text is limited, the available article details still point to a meaningful update that deserves a careful explanation.'} This is important because a long summary should not simply repeat the headline. It should clarify the situation, restate the central facts in a more readable format, and explain the consequences in plain language so the reader can follow the story without needing to search elsewhere.`,
-    `Looking ahead, the most useful question is how this development may evolve after the initial report. Follow-up announcements, official clarifications, additional evidence, and public reactions will determine whether the story gains momentum or stabilizes. That is why the expanded summary stays with the article rather than shrinking it into a short teaser. A 500-word explanation gives the reader enough depth to understand the issue, compare later updates against the original report, and remember the key facts more clearly.`,
-  ].join('\n\n');
-};
-
 const buildFastSummary = (article: NewsArticleInput) => {
   const headline = normalizeText(article.headline);
-  const topic = pickTopic(article);
   const summary = normalizeText(article.summary);
   const content = normalizeText(article.fullContent);
-
+  const source = normalizeText(article.source);
+  const publishedAt = normalizeText(article.publishedAt);
   const baseSummary = [
-    `${summary || headline} This story sits inside a larger ${topic.toLowerCase()} discussion and deserves a full reading because the details shape how the event is interpreted. A short headline only captures the surface, while the underlying report explains the people, institutions, decisions, and timing that make the development important. That context helps the reader understand whether the news is a sudden change, a continuation of an ongoing issue, or the first sign of something broader.`,
-    `At the center of the article is the main action or decision being reported, together with the immediate consequences for the groups involved. Readers should look carefully at what changed, why it changed, and who is likely to feel the effect first. That approach turns the story from a simple update into something more useful, because it shows the practical meaning behind the event rather than only the visible headline.`,
-    `The wider significance comes from how the story may influence public debate, official responses, market movement, social reactions, or future coverage depending on the topic. When a report moves quickly, the chain of cause and effect matters just as much as the announcement itself. Understanding that chain makes it easier to compare later statements with the original facts and to see whether the situation is building toward a larger outcome.`,
-    `A detailed summary also helps separate core facts from the surrounding noise. ${content ? content.slice(0, 420) : headline} This extra context makes the article easier to follow because it highlights the timeline, the major names, and the likely next steps in plain language. For NewsQuest, the goal is not to produce a short teaser. The goal is to create a study-style summary that gives enough information for the reader to understand the story before opening the full article.`,
-    `Overall, the report should be read as an evolving story with several moving parts. Monitoring follow-up statements, fresh data, official clarification, and public reaction will show whether the original direction continues or changes. This longer summary is intentionally designed to be detailed enough to stand on its own, so a reader can grasp the main facts, the significance, and the likely implications without needing extra background research.`,
-    buildSummaryPadding(article),
-  ].join('\n\n');
+    summary,
+    content,
+    `Source ${source}. Published ${publishedAt}.`,
+    headline,
+  ].filter(Boolean).join(' ');
 
-  return toExactWordCount(`${baseSummary}\n\n${buildSummaryPadding(article)}`, SUMMARY_WORD_TARGET);
+  return toExactWordCountFromSources(
+    baseSummary,
+    [content, summary, headline, source, publishedAt],
+    SUMMARY_WORD_TARGET,
+  );
+};
+
+const buildQuizVariants = (article: NewsArticleInput) => {
+  const topic = pickTopic(article);
+  const terms = extractKeyTerms(`${article.headline} ${article.summary} ${article.fullContent}`);
+  const numbers = extractNumberClues(`${article.headline} ${article.summary} ${article.fullContent}`);
+  const first = terms[0] ?? topic;
+  const second = terms[1] ?? first;
+  const third = terms[2] ?? second;
+  const fourth = terms[3] ?? article.category ?? topic;
+  const fifth = terms[4] ?? `${topic} stakeholders`;
+  const source = normalizeText(article.source || 'the source');
+  const publishedAt = normalizeText(article.publishedAt || 'recently').slice(0, 10);
+  const headline = normalizeText(article.headline);
+  const numberHint = numbers[0] ?? publishedAt;
+
+  const q1 = buildOptionSet(
+    `${first} is the hinge detail that changes how the headline should be interpreted`,
+    [
+      `${second} is only peripheral context and does not drive the main update`,
+      `${third} is historical background rather than the decisive trigger`,
+      `${fourth} appears in framing but does not alter the article's central claim`,
+    ],
+    `${headline}|q1`,
+  );
+  const q2 = buildOptionSet(
+    `The article implies a chain where ${second} influences outcomes through ${third}`,
+    [
+      `It treats ${second} and ${third} as unrelated events with no causal link`,
+      `It argues timing alone (${publishedAt}) explains the whole development`,
+      `It claims symbolic messaging matters more than the mechanism involving ${third}`,
+    ],
+    `${headline}|q2`,
+  );
+  const q3 = buildOptionSet(
+    `If the evidence around ${numberHint} is revised, the conclusion about ${first} weakens first`,
+    [
+      `A revision of ${numberHint} would mostly affect stylistic tone, not conclusions`,
+      `Only ${source} credibility would change while the claim about ${first} stays identical`,
+      `The article would become stronger because weaker evidence usually reinforces the same claim`,
+    ],
+    `${headline}|q3`,
+  );
+  const q4 = buildOptionSet(
+    `A direct contradiction would show ${fifth} moving opposite to the article's projected consequence`,
+    [
+      `A contradiction would only require renaming ${fifth} without changing outcomes`,
+      `The article can only be contradicted by disproving the publication date ${publishedAt}`,
+      `Any reaction that mentions ${topic} would automatically confirm the article's thesis`,
+    ],
+    `${headline}|q4`,
+  );
+  const q5 = buildOptionSet(
+    `The most exposed stakeholder in this framing is the group tied to ${fourth}`,
+    [
+      `No stakeholder is exposed because all outcomes are evenly distributed`,
+      `${source} alone carries full exposure while institutions tied to ${fourth} are unaffected`,
+      `Exposure is random and cannot be inferred from how ${fourth} is presented`,
+    ],
+    `${headline}|q5`,
+  );
+  const q6 = buildOptionSet(
+    `In timeline terms, the article places ${publishedAt} as the point after which ${third} becomes actionable`,
+    [
+      `It places ${publishedAt} before any preconditions, making later effects impossible`,
+      `It treats chronology as irrelevant, so ${third} is actionable at any time`,
+      `It suggests action preceded evidence, so timing around ${publishedAt} has no bearing`,
+    ],
+    `${headline}|q6`,
+  );
+
+  return [
+    {
+      question: `In "${headline}", which interpretation best captures the hinge event?`,
+      options: q1.options,
+      correctIndex: q1.correctIndex,
+      explanation: `${first} is presented as the pivot that turns context into a concrete development.`,
+    },
+    {
+      question: `Which causal reading is most consistent with how the article links ${second} and ${third}?`,
+      options: q2.options,
+      correctIndex: q2.correctIndex,
+      explanation: 'The narrative implies a mechanism, not just co-occurrence, between these details.',
+    },
+    {
+      question: `If the evidence point (${numberHint}) is later revised, what fails first in the article's logic?`,
+      options: q3.options,
+      correctIndex: q3.correctIndex,
+      explanation: 'That evidence supports the key inference; weakening it weakens the first-order claim.',
+    },
+    {
+      question: `Which development would most directly contradict the article's projected consequence?`,
+      options: q4.options,
+      correctIndex: q4.correctIndex,
+      explanation: 'A contradiction must reverse the direction of the expected outcome, not just wording.',
+    },
+    {
+      question: `From the article's framing, which stakeholder appears most exposed to second-order effects?`,
+      options: q5.options,
+      correctIndex: q5.correctIndex,
+      explanation: 'Exposure follows where consequences concentrate in the story\'s causal chain.',
+    },
+    {
+      question: `What timeline claim is the article implicitly making about events after ${publishedAt}?`,
+      options: q6.options,
+      correctIndex: q6.correctIndex,
+      explanation: 'The sequence matters because actionability is tied to the reported ordering of events.',
+    },
+  ];
 };
 
 export const buildFastArticleContent = (article: NewsArticleInput): GeneratedArticleContent => {
-  const topic = pickTopic(article);
   const headline = article.headline.replace(/\s+/g, ' ').trim();
-  const terms = extractKeyTerms(`${article.headline} ${article.summary}`);
-  const firstTerm = terms[0] ?? topic;
-  const secondTerm = terms[1] ?? firstTerm;
+  const variants = buildQuizVariants(article);
+  const rotation = hashString(`${article.headline}|${article.summary}|${article.publishedAt}`) % variants.length;
+  const orderedVariants = [...variants.slice(rotation), ...variants.slice(0, rotation)];
+  const quiz = orderedVariants.slice(0, 4).map((item, index) => {
+    const questionKey = normalizeText(item.question).toLowerCase();
+    const question = reserveQuestionText(questionKey) ? item.question : `${item.question} (${article.category || pickTopic(article)})`;
+    return {
+      question,
+      options: item.options,
+      correctIndex: item.correctIndex,
+      explanation: item.explanation,
+      id: `q${index + 1}`,
+    };
+  });
 
   return {
     headline: buildFastHeadline(article),
     summary: toExactWordCount(buildFastSummary(article), SUMMARY_WORD_TARGET),
-    quiz: [
-      {
-        question: `Which detail is most central to this article?`,
-        options: [firstTerm, 'A celebrity profile', 'A sports transfer', 'A travel feature'],
-        correctIndex: 0,
-        explanation: `The headline and summary repeatedly point to ${firstTerm}.`,
-      },
-      {
-        question: `What is the strongest implication of the report?`,
-        options: [
-          `It could lead to follow-up coverage around ${secondTerm}`,
-          'It is likely to be ignored completely',
-          'It is unrelated to any current issue',
-          'It only matters as background trivia',
-        ],
-        correctIndex: 0,
-        explanation: `The story is active enough that ${secondTerm} should trigger more reporting.`,
-      },
-      {
-        question: `What kind of evidence is the article mainly based on?`,
-        options: ['Headline and news summary', 'A personal opinion post', 'A fictional scenario', 'A product review'],
-        correctIndex: 0,
-        explanation: 'This news item is drawn from the headline and summary provided by the article.',
-      },
-      {
-        question: `Which answer best matches the article’s category?`,
-        options: [
-          article.category || 'General',
-          'Lifestyle',
-          'Entertainment',
-          'Travel',
-        ],
-        correctIndex: 0,
-        explanation: 'The category tag tells you which section this article belongs to.',
-      },
-    ],
-    prediction: {
-      question: `What is the most likely next development for this article about ${firstTerm}?`,
-      options: [
-        `More reporting or updates on ${firstTerm}`,
-        `The story ends without further changes`,
-        `A reversal of the main trend described`,
-      ],
-      deadline: futureDate(30),
-      xpReward: 25,
-    },
+    quiz,
+    prediction: buildContentPrediction(article),
   };
 };
 
-const buildPrompt = (article: NewsArticleInput) => `
+const buildPrompt = (article: NewsArticleInput) => {
+  const isGeneralKnowledge = article.category.trim().toLowerCase() === 'general knowledge';
+  if (isGeneralKnowledge) {
+    return `
+You are generating NewsQuest gameplay content for a general-knowledge quiz attempt.
+
+Return valid JSON only, with this exact shape:
+{
+  "headline": "string",
+  "summary": "string",
+  "quiz": [
+    {
+      "question": "string",
+      "options": ["A", "B", "C", "D"],
+      "correctIndex": 0,
+      "explanation": "string"
+    }
+  ],
+  "prediction": {
+    "question": "string",
+    "options": ["Option 1", "Option 2", "Option 3"],
+    "deadline": "YYYY-MM-DD",
+    "xpReward": 25
+  }
+}
+
+Rules:
+- Write exactly 4 quiz questions.
+- Theme is general knowledge only (polity, economy, sports, science, technology, world affairs).
+- Difficulty must be medium overall: not trivial, not expert-only.
+- Each question must be unique for this attempt; avoid reusing wording patterns.
+- Use plausible distractors, not obvious wrong options.
+- At least 2 questions should require reasoning/elimination, not pure recall.
+- correctIndex must be 0, 1, 2, or 3.
+- Keep options short and mutually exclusive.
+- Keep explanations concise and educational.
+- Prediction must be based on the article content itself (evidence-backed interpretation), not "what will happen next".
+- Avoid future-looking stems like "most likely next development" or "what will happen".
+- Deadline must be a future date in YYYY-MM-DD format.
+- Do not include markdown or extra commentary.
+
+Attempt seed:
+Headline: ${article.headline}
+Summary: ${article.summary}
+Full notes: ${article.fullContent}
+`;
+  }
+
+  return `
 You are generating NewsQuest gameplay content from a news article.
 
 Return valid JSON only, with this exact shape:
@@ -214,16 +432,19 @@ Return valid JSON only, with this exact shape:
 Rules:
 - Write exactly 4 quiz questions.
 - Quiz options must be short, distinct, and grounded in the article.
+- Make the quiz article-centered: use names, places, institutions, numbers, dates, or consequences from the story itself.
+- Avoid generic stems like "Which detail is most central?" unless they include article-specific context.
 - At least 2 questions should require inference or careful reading, not just headline recognition.
-- Each question should be specific to the article's actual subject matter, names, places, events, or implications.
+- Vary the question stems across articles so the same wording does not repeat from one story to the next.
 - correctIndex must be 0, 1, 2, or 3.
-- Prediction should be article-specific, forward-looking, and should mention the subject in the question.
+- Prediction should be article-specific and evidence-based from the current article details (not future speculation).
+- Prediction question must mention article entities/topics and be phrased as interpretation/alignment with reported facts.
 - Keep the prediction options short and mutually exclusive.
 - Deadline must be a future date in YYYY-MM-DD format.
 - xpReward should be an integer between 20 and 50.
 - Headline should be a polished, complete headline of 12 to 20 words, specific to the story.
-- Summary should be detailed and substantial, at least 500 words across 5 to 7 short paragraphs.
-- The summary must read like a full explanatory overview, not a teaser.
+- Summary must be exactly 200 words in 2 to 3 short paragraphs.
+- The summary must stay grounded in article facts (people, places, dates, outcomes) and avoid generic filler.
 - Do not include markdown or extra commentary.
 
 Article:
@@ -241,6 +462,7 @@ Important:
 - Make the quiz progressively harder: question 1 factual, question 2 detail-based, question 3 inference-based, question 4 implications or consequence-based.
 - If the full content is missing, generic, or paywalled, infer from the headline and summary instead.
 `;
+};
 
 const normaliseGeneratedContent = (article: NewsArticleInput, parsed: GeneratedArticleContent): GeneratedArticleContent => {
   const fallback = buildFastArticleContent(article);
@@ -252,14 +474,45 @@ const normaliseGeneratedContent = (article: NewsArticleInput, parsed: GeneratedA
     quiz.push(next);
   }
 
+  const normalizedQuiz = quiz.map((item, index) => {
+    const fallbackItem = fallback.quiz[index];
+    const question = typeof item.question === 'string' && item.question.trim() ? item.question.trim() : fallbackItem.question;
+    const uniqueQuestion = reserveQuestionText(question) ? question : `${question} (${article.category || pickTopic(article)})`;
+    const options = Array.isArray(item.options) && item.options.length >= 4 ? item.options.slice(0, 4) : fallbackItem.options;
+    const correctIndex = Number.isInteger(item.correctIndex) && item.correctIndex >= 0 && item.correctIndex < options.length
+      ? item.correctIndex
+      : fallbackItem.correctIndex;
+
+    return {
+      question: uniqueQuestion,
+      options,
+      correctIndex,
+      explanation: typeof item.explanation === 'string' && item.explanation.trim() ? item.explanation.trim() : fallbackItem.explanation,
+    };
+  });
+
   return {
     headline: typeof parsed.headline === 'string' && parsed.headline.trim() ? parsed.headline.trim() : fallback.headline,
     summary: (() => {
       const candidate = typeof parsed.summary === 'string' && parsed.summary.trim() ? parsed.summary.trim() : fallback.summary;
-      return toExactWordCount(`${candidate}\n\n${buildSummaryPadding(article)}`, SUMMARY_WORD_TARGET);
+      return toExactWordCountFromSources(
+        candidate,
+        [article.summary, article.fullContent, article.headline, article.source, article.publishedAt],
+        SUMMARY_WORD_TARGET,
+      );
     })(),
-    quiz,
-    prediction: parsed.prediction ?? fallback.prediction,
+    quiz: normalizedQuiz,
+    prediction: (() => {
+      const candidate = parsed.prediction ?? fallback.prediction;
+      const generic = typeof candidate?.question === 'string'
+        && /(most likely next development|what will happen|next update|future outcome)/i.test(candidate.question);
+      const hasValidOptions = Array.isArray(candidate?.options) && candidate.options.length >= 3;
+      if (generic || !hasValidOptions) return fallback.prediction;
+      return {
+        ...candidate,
+        question: reservePredictionText(candidate.question) ? candidate.question : `${candidate.question} (${article.category || pickTopic(article)})`,
+      };
+    })(),
   };
 };
 

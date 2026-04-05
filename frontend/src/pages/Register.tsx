@@ -7,10 +7,11 @@ import PasswordStrengthMeter from '@/components/auth/PasswordStrengthMeter';
 import StepProgress from '@/components/auth/StepProgress';
 import ParticleBg from '@/components/ParticleBg';
 import { AvatarVisual } from '@/components/game/AvatarVisual';
-import { createId } from '@/lib/utils';
-import { useGameStore } from '@/store/gameStore';
-import { useAuthStore, type UserData } from '@/store/useAuthStore';
 import { AVATAR_OPTIONS, getDefaultAvatarId, isAvatarUnlocked } from '@/data/avatars';
+import { supabase } from '@/lib/supabase';
+import { buildUserDataFromSupabaseUser } from '@/lib/supabaseUser';
+import { useAuthStore } from '@/store/useAuthStore';
+import { useGameStore } from '@/store/gameStore';
 
 const STEPS = [
   { label: 'Account', icon: '👤' },
@@ -22,7 +23,7 @@ const EXISTING_USERNAMES = ['demo_user', 'oracle_sage', 'quiz_master'];
 
 const Register = () => {
   const navigate = useNavigate();
-  const loginStore = useAuthStore((s) => s.login);
+  const login = useAuthStore((s) => s.login);
   const [step, setStep] = useState(0);
   const [isLaunching, setIsLaunching] = useState(false);
 
@@ -38,6 +39,7 @@ const Register = () => {
   const [passwordError, setPasswordError] = useState('');
   const [confirmError, setConfirmError] = useState('');
   const [checkingUsername, setCheckingUsername] = useState(false);
+  const [registerError, setRegisterError] = useState('');
 
   // Step 2
   const [selectedAvatar, setSelectedAvatar] = useState<number>(getDefaultAvatarId());
@@ -77,55 +79,87 @@ const Register = () => {
   const handleLaunch = () => {
     if (isLaunching) return;
     setIsLaunching(true);
+    setRegisterError('');
 
-    const user: UserData = {
-      id: createId(),
-      username, email,
-      joinDate: new Date().toISOString(),
-      avatarId: selectedAvatar,
-      avatarCustomization: { skinTone: 0, trailColor: 'cyan' },
-      currentLevel: 1,
-      totalXP: 25,
-      xpToNextLevel: 100,
-      streakCount: 0,
-      lastActiveDate: null,
-      interests: [],
-      dailyGoal: 5,
-      mode: 'both',
-      badges: ['Account Created'],
-      articlesRead: 0,
-      quizzesTotal: 0, quizzesCorrect: 0,
-      predictionsTotal: 0, predictionsCorrect: 0,
-      battleRating: 1000, battleTier: 'ROOKIE',
-      wins: 0, losses: 0, draws: 0,
-      recentForm: [],
-    };
-    loginStore(user);
-    useGameStore.setState((state) => ({
-      user: {
-        ...state.user,
-        username,
-        currentLevel: user.currentLevel,
-        totalXP: user.totalXP,
-        xpToNextLevel: user.xpToNextLevel,
-        streakCount: user.streakCount,
-        lastActiveDate: user.lastActiveDate ?? state.user.lastActiveDate,
-        articlesRead: user.articlesRead,
-        quizzesTotal: user.quizzesTotal,
-        quizzesCorrect: user.quizzesCorrect,
-        predictionsTotal: user.predictionsTotal,
-        predictionsCorrect: user.predictionsCorrect,
-        avatarId: user.avatarId,
-        avatarBody: 'scout',
-        focusMode: 'both',
-        dailyTarget: 5,
-        onboarded: true,
-      },
-    }));
+    void (async () => {
+      try {
+        const normalizedEmail = email.trim().toLowerCase();
+        const { data, error } = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password,
+          options: {
+            data: {
+              username,
+              avatar_id: selectedAvatar,
+              avatar_customization: { skinTone: 0, trailColor: 'cyan' },
+              current_level: 1,
+              total_xp: 25,
+              xp_to_next_level: 100,
+              streak_count: 0,
+              last_active_date: new Date().toISOString(),
+              interests: [],
+              daily_goal: 5,
+              mode: 'both',
+              badges: ['Account Created'],
+              articles_read: 0,
+              quizzes_total: 0,
+              quizzes_correct: 0,
+              predictions_total: 0,
+              predictions_correct: 0,
+              battle_rating: 1000,
+              battle_tier: 'ROOKIE',
+              wins: 0,
+              losses: 0,
+              draws: 0,
+              recent_form: [],
+            },
+          },
+        });
 
-    window.setTimeout(() => {
-      navigate('/landing', { replace: true });
-    }, 500);
+        if (error) {
+          setRegisterError(error.message);
+          setIsLaunching(false);
+          navigate('/login', { replace: true });
+          return;
+        }
+
+        if (data.session && data.user) {
+          const userData = buildUserDataFromSupabaseUser(data.user);
+          login(userData);
+          useGameStore.setState((state) => ({
+            user: {
+              ...state.user,
+              id: userData.id,
+              username: userData.username,
+              currentLevel: userData.currentLevel,
+              totalXP: userData.totalXP,
+              xpToNextLevel: userData.xpToNextLevel,
+              streakCount: userData.streakCount,
+              lastActiveDate: userData.lastActiveDate ?? state.user.lastActiveDate,
+              articlesRead: userData.articlesRead,
+              quizzesTotal: userData.quizzesTotal,
+              quizzesCorrect: userData.quizzesCorrect,
+              predictionsTotal: userData.predictionsTotal,
+              predictionsCorrect: userData.predictionsCorrect,
+              avatarId: userData.avatarId,
+              avatarBody: 'scout',
+              onboarded: true,
+            },
+          }));
+          navigate('/landing', { replace: true });
+          return;
+        }
+
+        navigate('/login', { replace: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to register account.';
+        setRegisterError(message.includes('rate limit')
+          ? 'This email was recently used too many times. Please log in with the same details.'
+          : message);
+        setIsLaunching(false);
+        navigate('/login', { replace: true });
+      }
+    })();
   };
 
   const pwChecks = [
@@ -446,6 +480,11 @@ const Register = () => {
                   'START MY JOURNEY'
                 )}
               </motion.button>
+              {registerError && (
+                <p className="text-xs text-center font-plex text-auth-error">
+                  {registerError}
+                </p>
+              )}
               {isLaunching && (
                 <p className="text-xs text-center font-plex text-muted-foreground">
                   Redirecting to the main screen...
