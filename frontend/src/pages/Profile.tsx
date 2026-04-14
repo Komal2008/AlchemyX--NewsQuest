@@ -6,23 +6,27 @@ import { BadgeCard } from '@/components/game/BadgeCard';
 import { ActivityHeatmap } from '@/components/game/ActivityHeatmap';
 import { StreakBadge } from '@/components/game/StreakBadge';
 import { AvatarVisual } from '@/components/game/AvatarVisual';
-import { getAvatarLabel } from '@/data/avatars';
+import { Avatar3DViewer } from '@/components/game/Avatar3DViewer';
+import { getAvatarLabel, getAvatarModel3D } from '@/data/avatars';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/useAuthStore';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRightLeft, LogOut } from 'lucide-react';
+import { Suspense, useState } from 'react';
 
 const Profile = () => {
   const user = useGameStore(s => s.user);
   const authUser = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
+  const [show3D, setShow3D] = useState(false);
   const quizAcc = user.quizzesTotal > 0 ? Math.round((user.quizzesCorrect / user.quizzesTotal) * 100) : 0;
   const predAcc = user.predictionsTotal > 0 ? Math.round((user.predictionsCorrect / user.predictionsTotal) * 100) : 0;
   const earnedBadges = user.badges.filter((badge) => badge.earned).length;
   const badgeProgress = `${earnedBadges}/${user.badges.length}`;
   const focusLabel = user.focusMode === 'news' ? 'News focus' : user.focusMode === 'upsc' ? 'UPSC focus' : 'Balanced mode';
+  const model3d = getAvatarModel3D(user.avatarId);
 
   return (
     <div className="min-h-screen bg-nq-void grain-overlay">
@@ -48,13 +52,61 @@ const Profile = () => {
               <div className="relative flex flex-col md:flex-row items-center gap-6">
                 <div className="relative shrink-0">
                   <div className="absolute inset-[-16px] rounded-[2rem] bg-nq-cyan/10 blur-2xl" />
-                  <div className="relative w-36 h-36 md:w-40 md:h-40 rounded-[2rem] glass border border-nq-cyan/30 flex items-center justify-center overflow-hidden bg-black/20 shadow-[0_0_30px_rgba(0,229,255,0.12)]">
-                    <AvatarVisual
-                      avatarId={user.avatarId}
-                      className="text-7xl"
-                      imageClassName="w-40 h-40"
-                    />
-                  </div>
+                  <motion.button
+                    onClick={() => setShow3D(!show3D)}
+                    className="relative w-36 h-36 md:w-40 md:h-40 rounded-[2rem] glass border border-nq-cyan/30 flex items-center justify-center overflow-hidden bg-black/20 shadow-[0_0_30px_rgba(0,229,255,0.12)] group hover:border-nq-cyan/50 transition-all"
+                  >
+                    <AnimatePresence mode="wait">
+                      {show3D && model3d ? (
+                        <Suspense fallback={
+                          <motion.div
+                            key="loading"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="text-white/40 text-xs"
+                          >
+                            Loading...
+                          </motion.div>
+                        }>
+                          <motion.div
+                            key="3d"
+                            initial={{ opacity: 0, rotateY: -90 }}
+                            animate={{ opacity: 1, rotateY: 0 }}
+                            exit={{ opacity: 0, rotateY: 90 }}
+                            className="w-full h-full"
+                          >
+                            <Avatar3DViewer 
+                              src={model3d} 
+                              autoRotate 
+                              interactive 
+                              className="w-full h-full"
+                            />
+                          </motion.div>
+                        </Suspense>
+                      ) : (
+                        <motion.div
+                          key="emoji"
+                          initial={{ opacity: 0, rotateY: 90 }}
+                          animate={{ opacity: 1, rotateY: 0 }}
+                          exit={{ opacity: 0, rotateY: -90 }}
+                        >
+                          <AvatarVisual
+                            avatarId={user.avatarId}
+                            className="text-7xl"
+                            imageClassName="w-40 h-40"
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    {model3d && (
+                      <div className="absolute inset-0 flex items-end justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className="text-[10px] bg-black/60 px-2 py-1 rounded text-nq-cyan">
+                          {show3D ? '2D' : '3D'}
+                        </span>
+                      </div>
+                    )}
+                  </motion.button>
                 </div>
 
                 <div className="flex-1 text-center md:text-left space-y-4">

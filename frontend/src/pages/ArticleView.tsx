@@ -9,6 +9,7 @@ import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Clock, BookOpen } from 'lucide-react';
 import { markUpscArticleCompleted } from '@/data/upscProgress';
+import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 
 const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim();
 
@@ -58,6 +59,7 @@ const ArticleView = () => {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [xpAwarded, setXpAwarded] = useState(false);
   const [gameplayLoading, setGameplayLoading] = useState(false);
+  const { speak, stop, supported } = useSpeechSynthesis();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -109,6 +111,19 @@ const ArticleView = () => {
     dedupeTextSentences(article.fullContent || article.summary || article.headline),
   );
 
+  const articleSpeechText = [article.headline, article.fullContent ?? article.summary]
+    .filter(Boolean)
+    .join('. ');
+
+  const handleStartSpeech = () => {
+    if (!supported) return;
+    speak(articleSpeechText);
+  };
+
+  const handleStopSpeech = () => {
+    stop();
+  };
+
   return (
     <div className="min-h-screen bg-nq-void grain-overlay">
       <HUDBar />
@@ -157,7 +172,7 @@ const ArticleView = () => {
           animate={scrollProgress > 0.5 ? { y: 0, opacity: 1 } : {}}
           className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-40"
         >
-          <GlassCard hover={false} className="flex items-center gap-3 px-4 py-3">
+          <GlassCard hover={false} className="flex flex-wrap items-center gap-3 px-4 py-3">
             <Link to={`/quiz/${article.id}`}>
               <motion.button whileTap={{ scale: 0.94 }} className="px-4 py-2 rounded-lg font-display text-xs font-bold bg-nq-purple/20 text-nq-purple border border-nq-purple/30 hover:glow-purple transition-all">
                 TAKE QUIZ +30XP
@@ -168,6 +183,20 @@ const ArticleView = () => {
                 PREDICT
               </motion.button>
             </Link>
+            <motion.button
+              whileTap={{ scale: 0.94 }}
+              className="px-4 py-2 rounded-lg font-display text-xs font-bold bg-nq-cyan/20 text-nq-cyan border border-nq-cyan/30 hover:glow-cyan transition-all"
+              onClick={handleStartSpeech}
+            >
+              🔊 LISTEN
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.94 }}
+              className="px-4 py-2 rounded-lg font-display text-xs font-bold bg-nq-text-secondary/10 text-nq-text-secondary border border-nq-text-secondary/20 hover:bg-nq-text-secondary/15 transition-all"
+              onClick={handleStopSpeech}
+            >
+              STOP
+            </motion.button>
           </GlassCard>
         </motion.div>
       </div>

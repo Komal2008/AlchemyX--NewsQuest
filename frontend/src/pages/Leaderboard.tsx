@@ -36,7 +36,11 @@ const Leaderboard = () => {
         const data = await fetchLeaderboard();
         if (!cancelled) setEntries(data.leaderboard ?? []);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load leaderboard.');
+        if (!cancelled) {
+          const errorMsg = err instanceof Error ? err.message : 'Failed to load leaderboard.';
+          setError(errorMsg);
+          setEntries([]); // Show empty leaderboard instead of stuck loading
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -94,7 +98,7 @@ const Leaderboard = () => {
     ? Math.max(0, getTabScore(nextUser) - getTabScore(currentUserEntry))
     : 0;
 
-  if (loading) {
+  if (loading && entries.length === 0) {
     return (
       <div className="min-h-screen bg-nq-void grain-overlay">
         <HUDBar />
@@ -112,8 +116,8 @@ const Leaderboard = () => {
       <HUDBar />
       <div className="pt-[108px] pb-20 md:pb-8 max-w-3xl mx-auto px-4">
         {error && (
-          <GlassCard hover={false} className="mb-4 py-3 text-center text-xs text-red-300">
-            {error}
+          <GlassCard hover={false} className="mb-4 py-3 text-center text-xs text-orange-300">
+            {error} - Showing cached or empty data
           </GlassCard>
         )}
         {/* Tabs */}

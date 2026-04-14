@@ -22,6 +22,7 @@ import ArticleView from "./pages/ArticleView";
 import QuizView from "./pages/QuizView";
 import PredictionView from "./pages/PredictionView";
 import Dashboard from "./pages/Dashboard";
+import CauseChainDashboard from "./pages/CauseChainDashboard";
 import Leaderboard from "./pages/Leaderboard";
 import Profile from "./pages/Profile";
 import UPSCMode from "./pages/UPSCMode";
@@ -161,6 +162,8 @@ const AppShell = () => {
             quizzesCorrect: updatedOauthUser.quizzesCorrect,
             predictionsTotal: updatedOauthUser.predictionsTotal,
             predictionsCorrect: updatedOauthUser.predictionsCorrect,
+            causeChainTotal: updatedOauthUser.causeChainTotal,
+            causeChainCorrect: updatedOauthUser.causeChainCorrect,
             badges: calculateBadgesStatus(updatedOauthUser.totalXP, updatedOauthUser.badges),
             avatarId: updatedOauthUser.avatarId,
             avatarBody: "scout",
@@ -210,6 +213,8 @@ const AppShell = () => {
         quizzesCorrect: authUser.quizzesCorrect,
         predictionsTotal: authUser.predictionsTotal,
         predictionsCorrect: authUser.predictionsCorrect,
+        causeChainTotal: authUser.causeChainTotal,
+        causeChainCorrect: authUser.causeChainCorrect,
         badges: calculateBadgesStatus(authUser.totalXP, authUser.badges),
         avatarId: authUser.avatarId ?? getLastActiveAvatarId() ?? state.user.avatarId,
         avatarBody: "scout",
@@ -248,6 +253,7 @@ const AppShell = () => {
               <Route path="/quiz/:id" element={<RequireAuth><QuizView /></RequireAuth>} />
               <Route path="/predict/:id" element={<RequireAuth><PredictionView /></RequireAuth>} />
               <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
+              <Route path="/cause-chain" element={<RequireAuth><CauseChainDashboard /></RequireAuth>} />
               <Route path="/battle" element={<RequireAuth><BattleLobby /></RequireAuth>} />
               <Route path="/battle/:id" element={<RequireAuth><BattleArena /></RequireAuth>} />
               <Route path="/leaderboard" element={<RequireAuth><Leaderboard /></RequireAuth>} />

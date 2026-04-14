@@ -75,6 +75,8 @@ export interface UserState {
   avatarBody: string;
   focusMode: 'news' | 'upsc' | 'both';
   dailyTarget: number;
+  causeChainTotal: number;
+  causeChainCorrect: number;
 }
 
 interface GameStore {
@@ -96,6 +98,7 @@ interface GameStore {
   incrementArticlesRead: () => void;
   incrementQuizzes: (correct: boolean) => void;
   incrementPredictions: (correct: boolean) => void;
+  incrementCauseChains: (correct: boolean) => void;
   dismissLevelUp: () => void;
   updateQuestProgress: (type: string) => void;
 }
@@ -316,6 +319,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     avatarBody: 'scout',
     focusMode: 'both',
     dailyTarget: 3,
+    causeChainTotal: 0,
+    causeChainCorrect: 0,
   },
   feed: {
     articles: balanceFeedArticles(remapCategory(readCachedFeedArticles())),
@@ -462,6 +467,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   })),
   incrementPredictions: (correct) => set(s => ({
     user: { ...s.user, predictionsTotal: s.user.predictionsTotal + 1, predictionsCorrect: s.user.predictionsCorrect + (correct ? 1 : 0) },
+  })),
+  incrementCauseChains: (correct) => set(s => ({
+    user: { ...s.user, causeChainTotal: s.user.causeChainTotal + 1, causeChainCorrect: s.user.causeChainCorrect + (correct ? 1 : 0) },
   })),
   dismissLevelUp: () => set(s => ({ ui: { ...s.ui, showLevelUpModal: false } })),
   updateQuestProgress: (type) => set(s => ({

@@ -5,7 +5,7 @@ import { Swords, Flame, Zap, Home, RotateCcw } from 'lucide-react';
 import ParticleBg from '@/components/ParticleBg';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useBattleStore, type RoundResult, type Opponent } from '@/store/useBattleStore';
-import { useBattleSocketContext } from '@/hooks/BattleSocketProvider';
+import { useBattleSocketContext } from '@/hooks/useBattleSocketContext';
 import { getQuestionsForBattle } from '@/data/battleQuestions';
 import type { BattleQuestion } from '@/data/battleQuestions';
 import { recordBattleProgress } from '@/lib/progressSync';

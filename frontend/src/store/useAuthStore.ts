@@ -21,6 +21,8 @@ export interface UserData {
   quizzesCorrect: number;
   predictionsTotal: number;
   predictionsCorrect: number;
+  causeChainTotal: number;
+  causeChainCorrect: number;
   battleRating: number;
   battleTier: string;
   wins: number;

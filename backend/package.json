@@ -11,6 +11,7 @@
     "serve:bytez": "node scripts/server.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.3",
     "bytez.js": "3.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",

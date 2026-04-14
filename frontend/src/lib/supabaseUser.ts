@@ -53,6 +53,8 @@ export const buildUserDataFromSupabaseUser = (authUser: SupabaseUser): UserData 
   const quizzesCorrect = readMetaNumber(metadata, ['quizzes_correct', 'quizzesCorrect'], 0);
   const predictionsTotal = readMetaNumber(metadata, ['predictions_total', 'predictionsTotal'], 0);
   const predictionsCorrect = readMetaNumber(metadata, ['predictions_correct', 'predictionsCorrect'], 0);
+  const causeChainTotal = readMetaNumber(metadata, ['cause_chains_total', 'causeChainTotal'], 0);
+  const causeChainCorrect = readMetaNumber(metadata, ['cause_chains_correct', 'causeChainCorrect'], 0);
   const battleRating = readMetaNumber(metadata, ['battle_rating', 'battleRating'], 1000);
   const wins = readMetaNumber(metadata, ['wins'], 0);
   const losses = readMetaNumber(metadata, ['losses'], 0);
@@ -79,6 +81,8 @@ export const buildUserDataFromSupabaseUser = (authUser: SupabaseUser): UserData 
     quizzesCorrect,
     predictionsTotal,
     predictionsCorrect,
+    causeChainTotal,
+    causeChainCorrect,
     battleRating,
     battleTier: readMetaString(metadata, ['battle_tier', 'battleTier'], 'ROOKIE'),
     wins,
@@ -109,6 +113,8 @@ export const buildSignupMetadata = (input: {
   quizzes_correct: 0,
   predictions_total: 0,
   predictions_correct: 0,
+  cause_chains_total: 0,
+  cause_chains_correct: 0,
   battle_rating: 1000,
   battle_tier: 'ROOKIE',
   wins: 0,

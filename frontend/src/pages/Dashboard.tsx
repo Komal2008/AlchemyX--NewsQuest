@@ -17,7 +17,7 @@ const Dashboard = () => {
   const user = useGameStore((s) => s.user);
   const [trendData, setTrendData] = useState<Array<{ day: string; actions: number }>>([]);
   const [categoryKeys, setCategoryKeys] = useState<string[]>([]);
-  const [categoryDaily, setCategoryDaily] = useState<Array<{ day: string; [category: string]: number | string }>>([]);
+  const [categoryDaily, setCategoryDaily] = useState<Array<{ day: string;[category: string]: number | string }>>([]);
 
   useEffect(() => {
     if (!authUser) navigate('/login');
@@ -150,9 +150,8 @@ const Dashboard = () => {
                   {battleForm.slice(0, 10).map((result, index) => (
                     <div
                       key={`${result}-${index}`}
-                      className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                        result === 'W' ? 'bg-auth-success/20 text-auth-success' : result === 'L' ? 'bg-auth-error/20 text-auth-error' : 'bg-auth-warning/20 text-auth-warning'
-                      }`}
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold ${result === 'W' ? 'bg-auth-success/20 text-auth-success' : result === 'L' ? 'bg-auth-error/20 text-auth-error' : 'bg-auth-warning/20 text-auth-warning'
+                        }`}
                     >
                       {result === 'W' ? '✓' : result === 'L' ? '✗' : '='}
                     </div>

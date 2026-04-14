@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Check, ArrowLeft, Sparkles } from 'lucide-react';
 import { GlassCard } from '@/components/game/GlassCard';
 import { HUDBar } from '@/components/game/HUDBar';
 import { AvatarVisual } from '@/components/game/AvatarVisual';
-import { AVATAR_OPTIONS, getLastActiveAvatarId, isAvatarUnlocked } from '@/data/avatars';
+import { Avatar3DViewer } from '@/components/game/Avatar3DViewer';
+import { AVATAR_OPTIONS, getLastActiveAvatarId, isAvatarUnlocked, getAvatarModel3D } from '@/data/avatars';
 import { supabase } from '@/lib/supabase';
 import { buildUserDataFromSupabaseUser } from '@/lib/supabaseUser';
 import { syncProfileToDatabase } from '@/lib/profileApi';
@@ -108,12 +109,23 @@ const AvatarEditor = () => {
               </div>
               <div className="rounded-3xl border border-nq-cyan/20 bg-[radial-gradient(circle_at_top,rgba(0,229,255,0.08),transparent_55%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent)] p-8 flex items-center justify-center">
                 <div className="w-56 h-56 rounded-full glass border-2 border-nq-cyan/30 overflow-hidden flex items-center justify-center bg-white/5">
-                  <AvatarVisual avatarId={selectedAvatar} className="text-8xl" imageClassName="w-56 h-56" />
+                  {getAvatarModel3D(selectedAvatar) ? (
+                    <Suspense fallback={<div className="text-white/40 text-xs">Loading 3D...</div>}>
+                      <Avatar3DViewer 
+                        src={getAvatarModel3D(selectedAvatar)!} 
+                        autoRotate 
+                        interactive={false}
+                        className="w-full h-full"
+                      />
+                    </Suspense>
+                  ) : (
+                    <AvatarVisual avatarId={selectedAvatar} className="text-8xl" imageClassName="w-56 h-56" />
+                  )}
                 </div>
               </div>
               <div className="text-center space-y-1">
                 <p className="font-orbitron text-lg text-foreground">{selected.name}</p>
-                <p className="text-sm text-nq-text-secondary">{selected.badge}</p>
+                <p className="text-sm text-nq-text-secondary">{selected.description || selected.badge}</p>
               </div>
               <p className="text-center text-xs text-nq-text-muted">
                 Changes save to your account and will appear on the feed, battles, and profile.
@@ -149,6 +161,7 @@ const AvatarEditor = () => {
               {AVATAR_OPTIONS.map((avatar) => {
                 const active = selectedAvatar === avatar.id;
                 const unlocked = isAvatarUnlocked(avatar, currentLevel, earnedBadgeIds);
+                const model3d = getAvatarModel3D(avatar.id);
                 return (
                   <motion.button
                     key={avatar.id}
@@ -163,11 +176,22 @@ const AvatarEditor = () => {
                       }`}
                   >
                     <div className="relative aspect-square rounded-2xl bg-black/20 border border-white/10 overflow-hidden flex items-center justify-center mb-3">
-                      <AvatarVisual avatarId={avatar.id} className="text-5xl" imageClassName="w-full h-full" />
+                      {model3d ? (
+                        <Suspense fallback={<div className="text-white/30 text-xs">3D</div>}>
+                          <Avatar3DViewer 
+                            src={model3d} 
+                            autoRotate 
+                            interactive={false}
+                            className="w-full h-full"
+                          />
+                        </Suspense>
+                      ) : (
+                        <AvatarVisual avatarId={avatar.id} className="text-5xl" imageClassName="w-full h-full" />
+                      )}
                       {!unlocked && (
                         <div className="absolute inset-0 bg-black/45 flex flex-col items-center justify-center gap-1">
                           <span className="text-2xl text-white/90">🔒</span>
-                          <span className="text-[9px] font-space-mono text-white/80">{avatar.badge}</span>
+                          <span className="text-[9px] font-space-mono text-white/80">Lvl {avatar.unlockedAtLevel || avatar.unlockLevel}</span>
                         </div>
                       )}
                     </div>
@@ -176,7 +200,7 @@ const AvatarEditor = () => {
                         <p className="font-orbitron text-xs text-foreground truncate">{avatar.name}</p>
                         {active && <Check size={12} className="text-nq-cyan shrink-0" />}
                       </div>
-                      <p className="text-[10px] font-space-mono uppercase tracking-wide text-nq-text-muted">{avatar.badge}</p>
+                      <p className="text-[10px] font-space-mono uppercase tracking-wide text-nq-text-muted">{avatar.description || avatar.badge}</p>
                     </div>
                   </motion.button>
                 );

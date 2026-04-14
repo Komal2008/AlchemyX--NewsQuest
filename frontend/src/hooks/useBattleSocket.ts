@@ -120,6 +120,19 @@ export const useBattleSocket = () => {
     const guestId = useMemo(() => `guest_${Math.floor(Math.random() * 900000 + 100000)}`, []);
     const currentPlayer = useMemo(() => getCurrentPlayer(user, guestId), [user, guestId]);
 
+    // Track all your account IDs in localStorage to filter them out
+    useEffect(() => {
+        if (!user?.id) return;
+        
+        const storedAccounts = localStorage.getItem('myAccountIds');
+        const accountSet = storedAccounts ? new Set(JSON.parse(storedAccounts)) : new Set<string>();
+        accountSet.add(user.id);
+        
+        const accountArray = Array.from(accountSet);
+        localStorage.setItem('myAccountIds', JSON.stringify(accountArray));
+        console.log('[BattleSocket] Stored account IDs in localStorage:', accountArray);
+    }, [user?.id]);
+
     useEffect(() => {
         const channel = supabase.channel('battle-lobby', {
             config: {
@@ -129,14 +142,39 @@ export const useBattleSocket = () => {
         });
 
         setSelfId(currentPlayer.id);
+        console.log('[BattleSocket] Initializing with currentPlayer:', currentPlayer.id);
 
         const syncPresence = () => {
-            setOnlinePlayers(mapPresenceState(channel.presenceState()));
+            const presenceState = channel.presenceState();
+            console.log('%c[BattleSocket] PRESENCE STATE', 'background: #1e3c72; color: #00ff00; font-weight: bold', presenceState);
+            
+            // Get all your account IDs from localStorage
+            const storedAccounts = localStorage.getItem('myAccountIds');
+            const myAccountIds = new Set(storedAccounts ? JSON.parse(storedAccounts) : []);
+            console.log('[BattleSocket] My Account IDs from localStorage:', Array.from(myAccountIds));
+            
+            const mapped = mapPresenceState(presenceState);
+            
+            // Filter out: your own accounts, and guests
+            const filtered = mapped.filter(p => {
+                const isMyAccount = myAccountIds.has(p.id);
+                const isGuest = p.id.startsWith('guest_');
+                
+                const shouldShow = !isMyAccount && !isGuest;
+                
+                console.log(`[BattleSocket] Checking ${p.username} (${p.id}): isMyAccount=${isMyAccount}, isGuest=${isGuest}, show=${shouldShow}`);
+                
+                return shouldShow;
+            });
+            
+            console.log('%c[BattleSocket] FINAL ONLINE PLAYERS TO SHOW', 'background: #1b4965; color: #90e0ef; font-weight: bold', filtered.length, 'players:', filtered.map(p => ({ id: p.id, username: p.username })));
+            setOnlinePlayers(filtered);
         };
 
         const updateConnectionState = (status: unknown) => {
             const statusObj = status as { status?: string; type?: string } | null;
             const normalizedStatusValue = typeof status === 'string' ? status : statusObj?.status ?? statusObj?.type;
+            console.log('[BattleSocket] Status update:', normalizedStatusValue);
             if (normalizedStatusValue === 'SUBSCRIBED') {
                 setSocketConnected(true);
                 return true;
@@ -148,9 +186,18 @@ export const useBattleSocket = () => {
         };
 
         channel
-            .on('presence', { event: 'sync' }, syncPresence)
-            .on('presence', { event: 'join' }, syncPresence)
-            .on('presence', { event: 'leave' }, syncPresence)
+            .on('presence', { event: 'sync' }, () => {
+                console.log('[BattleSocket] Presence SYNC event');
+                syncPresence();
+            })
+            .on('presence', { event: 'join' }, (payload) => {
+                console.log('[BattleSocket] Presence JOIN event:', payload);
+                syncPresence();
+            })
+            .on('presence', { event: 'leave' }, (payload) => {
+                console.log('[BattleSocket] Presence LEAVE event:', payload);
+                syncPresence();
+            })
             .on('broadcast', { event: 'challenge' }, (payload) => {
                 if (!payload?.payload || payload.payload.targetId !== currentPlayer.id) return;
                 setIncomingChallenge({
@@ -190,13 +237,31 @@ export const useBattleSocket = () => {
             })
             .subscribe(async (status) => {
                 const isSubscribed = updateConnectionState(status);
-                if (!isSubscribed) return;
+                console.log('[BattleSocket] Subscribe callback. Status:', status, 'isSubscribed:', isSubscribed);
+                if (!isSubscribed) {
+                    console.log('[BattleSocket] Not subscribed, skipping track');
+                    return;
+                }
 
-                await channel.track({
-                    ...currentPlayer,
-                    lastSeen: new Date().toISOString(),
-                });
-                syncPresence();
+                try {
+                    console.log('[BattleSocket] Tracking presence for:', currentPlayer.id, 'Username:', currentPlayer.username);
+                    const trackResult = await channel.track({
+                        ...currentPlayer,
+                        lastSeen: new Date().toISOString(),
+                    });
+                    console.log('[BattleSocket] Track result:', trackResult);
+                    
+                    // Sync immediately after tracking
+                    syncPresence();
+                    
+                    // Also sync after a small delay to ensure server syncs
+                    setTimeout(() => {
+                        console.log('[BattleSocket] Secondary sync after track');
+                        syncPresence();
+                    }, 300);
+                } catch (error) {
+                    console.error('[BattleSocket] Error tracking presence:', error);
+                }
             });
 
         channelRef.current = channel;
@@ -276,6 +341,19 @@ export const useBattleSocket = () => {
         setOutgoingStatus('idle');
     }, []);
 
+    const refreshPresence = useCallback(() => {
+        if (!channelRef.current) {
+            console.log('[BattleSocket] Cannot refresh - channel not initialized');
+            return;
+        }
+        console.log('[BattleSocket] Manual refresh triggered');
+        const presenceState = channelRef.current.presenceState();
+        console.log('[BattleSocket] Current presence state:', presenceState);
+        const mapped = mapPresenceState(presenceState);
+        console.log('[BattleSocket] Mapped players:', mapped);
+        setOnlinePlayers(mapped);
+    }, []);
+
     const joinBattleRoom = useCallback(
         (roomId: string) => {
             if (!channelRef.current) return;
@@ -321,10 +399,20 @@ export const useBattleSocket = () => {
         setTimerSync(null);
     }, []);
 
+    // Debug function to clear stored accounts 
+    const clearStoredAccounts = useCallback(() => {
+        localStorage.removeItem('myAccountIds');
+        if (user?.id) {
+            localStorage.setItem('myAccountIds', JSON.stringify([user.id]));
+        }
+        console.log('[BattleSocket] Cleared and reset account list');
+    }, [user?.id]);
+
     return {
         socketConnected,
         selfId,
         onlinePlayers,
+        onlinePlayersCount: onlinePlayers.length,
         incomingChallenge,
         outgoingStatus,
         battleRoom,
@@ -336,6 +424,7 @@ export const useBattleSocket = () => {
         sendBattleAction,
         resetChallenge,
         clearBattleRoom,
+        refreshPresence,
     };
 };
 

@@ -6,7 +6,7 @@ import ParticleBg from '@/components/ParticleBg';
 import { createId } from '@/lib/utils';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useBattleStore, type Opponent } from '@/store/useBattleStore';
-import { useBattleSocketContext } from '@/hooks/BattleSocketProvider';
+import { useBattleSocketContext } from '@/hooks/useBattleSocketContext';
 import { supabase } from '@/lib/supabase';
 import { getQuestionsForBattle } from '@/data/battleQuestions';
 import { MOCK_OPPONENTS } from '@/data/mockData';
@@ -107,7 +107,12 @@ const BattleLobby = () => {
     clearBattleRoom,
     socketConnected,
     selfId,
+    refreshPresence,
+    onlinePlayersCount,
   } = useBattleSocketContext();
+
+  console.log('[BattleLobby] Socket connected:', socketConnected, 'Online players:', onlinePlayers.length, 'Players:', onlinePlayers);
+  console.log('[BattleLobby] Current user:', user?.id, user?.username);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showChallenge, setShowChallenge] = useState(false);
@@ -119,8 +124,8 @@ const BattleLobby = () => {
   const [rivalsLoading, setRivalsLoading] = useState(false);
   const [rivalsError, setRivalsError] = useState<string | null>(null);
 
-  const liveOpponents = onlinePlayers.filter((player) => player.id !== user?.id && player.socketId !== selfId);
-  const suggested = liveOpponents.length > 0 ? liveOpponents : rivalUsers;
+  // Show online players first, fallback to rival users from database
+  const suggested = onlinePlayers.length > 0 ? onlinePlayers : rivalUsers;
 
   const openChallengeWithTarget = useCallback((target: Opponent) => {
     if (!mode) setMode('quiz');
@@ -305,6 +310,21 @@ const BattleLobby = () => {
     return () => clearInterval(interval);
   }, [status, setBattleId]);
 
+  // Periodically refresh presence to show online players
+  useEffect(() => {
+    if (!socketConnected) return;
+    
+    // Refresh immediately
+    refreshPresence();
+    
+    // Then refresh every 3 seconds
+    const interval = setInterval(() => {
+      refreshPresence();
+    }, 3000);
+    
+    return () => clearInterval(interval);
+  }, [socketConnected, refreshPresence]);
+
   if (!user) return null;
 
   const filteredRivalUsers = suggested.filter((o) =>
@@ -324,9 +344,6 @@ const BattleLobby = () => {
           <span className="font-orbitron text-lg text-gradient-cyan tracking-wider">BATTLE ARENA</span>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => setShowSettings(!showSettings)} className="p-2 rounded-lg hover:bg-muted transition-colors">
-            <Settings className="w-5 h-5 text-muted-foreground" />
-          </button>
           <button onClick={() => { reset(); navigate('/'); }} className="p-2 rounded-lg hover:bg-muted transition-colors">
             <X className="w-5 h-5 text-muted-foreground" />
           </button>
@@ -575,6 +592,12 @@ const BattleLobby = () => {
             {/* IDLE */}
             {(status === 'idle') && (
               <motion.div key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-6">
+                {!socketConnected && (
+                  <div className="rounded-lg bg-auth-error/20 border border-auth-error/50 p-3">
+                    <p className="text-[11px] font-space-mono text-auth-error">Waiting for connection. If stuck, try refreshing the page.</p>
+                  </div>
+                )}
+
                 <div className="text-center space-y-2 py-6">
                   <motion.div animate={{ scale: [1, 1.1, 1] }} transition={{ duration: 2, repeat: Infinity }}>
                     <Search className="w-12 h-12 mx-auto text-battle-red" />
@@ -584,16 +607,20 @@ const BattleLobby = () => {
                 </div>
 
                 <div>
-                  <p className="text-[10px] font-space-mono uppercase text-muted-foreground mb-3">Recommended Rivals</p>
+                  <p className="text-[10px] font-space-mono uppercase text-muted-foreground mb-3">
+                    Online Players {filteredRivalUsers.length > 0 ? `(${filteredRivalUsers.length})` : ''}
+                  </p>
                   <div className="space-y-2">
                     {rivalsLoading ? (
                       <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">Loading rivals...</div>
                     ) : rivalsError ? (
                       <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-red-300">{rivalsError}</div>
-                    ) : suggested.length === 0 ? (
-                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">No rivals available</div>
+                    ) : filteredRivalUsers.length === 0 ? (
+                      <div className="rounded-2xl glass border border-white/10 bg-[#23282f]/70 p-4 text-center text-xs text-muted-foreground">
+                        {socketConnected ? 'No other players online right now. Invite your friend to join!' : 'Lost connection - try refreshing'}
+                      </div>
                     ) : (
-                      suggested.map((opp) => (
+                      filteredRivalUsers.map((opp) => (
                         <OpponentCard key={opp.id} opp={opp} onChallenge={() => openChallengeWithTarget(opp)} />
                       ))
                     )}

@@ -53,7 +53,25 @@ const fetchJson = async <T>(url: string): Promise<T> => {
     const body = await response.text().catch(() => '');
     throw new Error(`${response.status} ${body}`);
   }
-  return response.json() as Promise<T>;
+  const text = await response.text();
+  if (!text || text.trim() === '') {
+    throw new Error('Empty response');
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (parseError) {
+    console.error('JSON parse error:', parseError, 'Response:', text.slice(0, 500));
+    throw new Error('Invalid JSON response');
+  }
+};
+
+// Helper to add timeout to async operations
+const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 };
 
 const listUserProfiles = async () => {
@@ -62,7 +80,11 @@ const listUserProfiles = async () => {
     select: '*',
     limit: '1000',
   });
-  return fetchJson<UserProfileRow[]>(`${base}/rest/v1/profiles?${query.toString()}`);
+  return withTimeout(
+    fetchJson<UserProfileRow[]>(`${base}/rest/v1/profiles?${query.toString()}`),
+    10000,
+    'User profiles'
+  );
 };
 
 const listQuizRows = async () => {
@@ -71,7 +93,11 @@ const listQuizRows = async () => {
     select: 'user_id,correct,total',
     limit: '1000',
   });
-  return fetchJson<QuizRow[]>(`${base}/rest/v1/quiz_results?${query.toString()}`);
+  return withTimeout(
+    fetchJson<QuizRow[]>(`${base}/rest/v1/quiz_results?${query.toString()}`),
+    8000,
+    'Quiz rows'
+  );
 };
 
 const listWeeklyActivity = async () => {
@@ -84,14 +110,18 @@ const listWeeklyActivity = async () => {
     limit: '5000',
   });
 
-  return fetchJson<ActivityRow[]>(`${base}/rest/v1/user_activity?${legacyQuery.toString()}`).catch(async () => {
-    const richQuery = new URLSearchParams({
-      select: 'user_id,total_events',
-      activity_date: `gte.${weekStart}`,
-      limit: '5000',
-    });
-    return fetchJson<ActivityRow[]>(`${base}/rest/v1/user_activity_days?${richQuery.toString()}`);
-  });
+  return withTimeout(
+    fetchJson<ActivityRow[]>(`${base}/rest/v1/user_activity?${legacyQuery.toString()}`).catch(async () => {
+      const richQuery = new URLSearchParams({
+        select: 'user_id,total_events',
+        activity_date: `gte.${weekStart}`,
+        limit: '5000',
+      });
+      return fetchJson<ActivityRow[]>(`${base}/rest/v1/user_activity_days?${richQuery.toString()}`);
+    }),
+    8000,
+    'Weekly activity'
+  );
 };
 
 router.get('/', async (_req, res) => {

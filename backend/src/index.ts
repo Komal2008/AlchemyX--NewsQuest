@@ -11,6 +11,7 @@ import battleRouter from './routes/battle.js';
 import predictionsRouter from './routes/predictions.js';
 import leaderboardRouter from './routes/leaderboard.js';
 import usersRouter from './routes/users.js';
+import causeChainRouter from './routes/causeChain.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { flushCache, getCacheStats } from './services/newsDataService.js';
 
@@ -91,6 +92,7 @@ app.use('/api/battle', battleRouter);
 app.use('/api/predictions', predictionsRouter);
 app.use('/api/leaderboard', leaderboardRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/cause-chain', causeChainRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ success: false, error: 'Endpoint not found' });
@@ -112,6 +114,10 @@ app.listen(port, host, () => {
   console.log('POST /api/battle/invite');
   console.log('POST /api/predictions/resolve');
   console.log('GET  /api/leaderboard');
+  console.log('GET  /api/cause-chain/:articleId');
+  console.log('POST /api/cause-chain/generate');
+  console.log('POST /api/cause-chain/submit');
+  console.log('GET  /api/cause-chain/stats/:userId');
   console.log('POST /api/users/sync');
   console.log('GET  /api/health');
 });

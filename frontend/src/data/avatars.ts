@@ -1,35 +1,35 @@
-export type AvatarKind = 'emoji' | 'image';
+export type AvatarKind = 'emoji' | 'image' | '3d';
 
 export interface AvatarOption {
   id: number;
   name: string;
   badge: string;
+  description?: string;
   unlocked: boolean;
   unlockLevel?: number;
+  unlockedAtLevel?: number;
   unlockBadges?: string[];
+  requiredBadges?: string[];
   kind: AvatarKind;
   emoji?: string;
   src?: string;
+  model3d?: string;
 }
 
 export const AVATAR_OPTIONS: AvatarOption[] = [
-  { id: 0, name: 'Scout', badge: 'DEFAULT', unlocked: true, kind: 'emoji', emoji: '🏃' },
-  { id: 1, name: 'Strategist', badge: 'DEFAULT', unlocked: true, kind: 'emoji', emoji: '🧠' },
-  { id: 2, name: 'Oracle', badge: 'Streak + Reader', unlocked: false, unlockLevel: 10, unlockBadges: ['b4', 'b5'], kind: 'emoji', emoji: '🔮' },
-  { id: 3, name: 'Architect', badge: 'Bookworm + Sharp Mind', unlocked: false, unlockBadges: ['b5', 'b6'], kind: 'emoji', emoji: '⚡' },
-  { id: 4, name: 'Phantom', badge: 'Seer + Night Owl', unlocked: false, unlockBadges: ['b7', 'b8'], kind: 'emoji', emoji: '👻' },
-  { id: 5, name: 'Girl Hoodie', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-girl-hoodie.png' },
-  { id: 6, name: 'Bee Hoodie', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-bee-hoodie.jpeg' },
-  { id: 7, name: 'Smiling Hero', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-boy-smile.jpeg' },
-  { id: 8, name: 'Sparkle Star', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-girl-sparkles.jpeg' },
-  { id: 9, name: 'Red Sailor', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-red-sailor.jpeg' },
-  { id: 10, name: 'Dark Catgirl', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-dark-catgirl.jpeg' },
-  { id: 11, name: 'Rose School', badge: 'Badges 9+10', unlocked: false, unlockBadges: ['b9', 'b10'], kind: 'image', src: '/avatars/avatar-rose-school.jpeg' },
-  { id: 12, name: 'Bear Hoodie', badge: 'Badges 11+12', unlocked: false, unlockBadges: ['b11', 'b12'], kind: 'image', src: '/avatars/avatar-bear-hoodie.jpeg' },
-  { id: 13, name: 'Campus Boy', badge: 'Badges 13+14', unlocked: false, unlockBadges: ['b13', 'b14'], kind: 'image', src: '/avatars/avatar-campus-boy.jpeg' },
-  { id: 14, name: 'Sentinel', badge: 'Badges 15+16', unlocked: false, unlockBadges: ['b15', 'b16'], kind: 'emoji', emoji: '🛡️' },
-  { id: 15, name: 'Astra Legend', badge: 'Badges 17+18', unlocked: false, unlockBadges: ['b17', 'b18'], kind: 'emoji', emoji: '🌠' },
-  { id: 16, name: 'Visionary', badge: 'Badges 19+20', unlocked: false, unlockBadges: ['b19', 'b20'], kind: 'emoji', emoji: '🔭' },
+  { id: 0, name: 'Architect', badge: 'Bookworm + Sharp Mind', description: 'The lightning fast', unlocked: false, unlockBadges: ['b5', 'b6'], kind: '3d', emoji: '⚡', model3d: '/avatar/3d/avatar-electric.glb' },
+  { id: 1, name: 'Girl Hoodie', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-girl-hoodie.png' },
+  { id: 2, name: 'Bee Hoodie', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-bee-hoodie.jpeg' },
+  { id: 3, name: 'Smiling Hero', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-boy-smile.jpeg' },
+  { id: 4, name: 'Sparkle Star', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-girl-sparkles.jpeg' },
+  { id: 5, name: 'Red Sailor', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-red-sailor.jpeg' },
+  { id: 6, name: 'Dark Catgirl', badge: 'NEW', unlocked: true, kind: 'image', src: '/avatars/avatar-dark-catgirl.jpeg' },
+  { id: 7, name: 'Rose School', badge: 'Badges 9+10', unlocked: false, unlockBadges: ['b9', 'b10'], kind: 'image', src: '/avatars/avatar-rose-school.jpeg' },
+  { id: 8, name: 'Bear Hoodie', badge: 'Badges 11+12', unlocked: false, unlockBadges: ['b11', 'b12'], kind: 'image', src: '/avatars/avatar-bear-hoodie.jpeg' },
+  { id: 9, name: 'Campus Boy', badge: 'Badges 13+14', unlocked: false, unlockBadges: ['b13', 'b14'], kind: 'image', src: '/avatars/avatar-campus-boy.jpeg' },
+  { id: 10, name: 'Sentinel', badge: 'Badges 15+16', unlocked: false, unlockBadges: ['b15', 'b16'], kind: 'emoji', emoji: '🛡️' },
+  { id: 11, name: 'Astra Legend', badge: 'Badges 17+18', unlocked: false, unlockBadges: ['b17', 'b18'], kind: 'emoji', emoji: '🌠' },
+  { id: 12, name: 'Visionary', badge: 'Badges 19+20', unlocked: false, unlockBadges: ['b19', 'b20'], kind: 'emoji', emoji: '🔭' },
 ];
 
 export const getAvatarOption = (avatarId?: number | null) =>
@@ -90,3 +90,6 @@ export const getDefaultAvatarId = (userLevel = 0) =>
   AVATAR_OPTIONS.find((avatar) => avatar.kind === 'image' && isAvatarUnlocked(avatar, userLevel))?.id ??
   AVATAR_OPTIONS.find((avatar) => isAvatarUnlocked(avatar, userLevel))?.id ??
   0;
+
+export const getAvatarModel3D = (avatarId?: number | null): string | undefined =>
+  getAvatarOption(avatarId).model3d;

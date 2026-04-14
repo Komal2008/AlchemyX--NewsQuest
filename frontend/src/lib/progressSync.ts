@@ -57,6 +57,8 @@ const applyLocalProgress = (patch: {
   quizzesCorrectDelta?: number;
   predictionsTotalDelta?: number;
   predictionsCorrectDelta?: number;
+  causeChainTotalDelta?: number;
+  causeChainCorrectDelta?: number;
   battleRatingDelta?: number;
   winsDelta?: number;
   lossesDelta?: number;
@@ -99,6 +101,8 @@ const applyLocalProgress = (patch: {
     quizzesCorrect: state.user.quizzesCorrect + (patch.quizzesCorrectDelta ?? 0),
     predictionsTotal: state.user.predictionsTotal + (patch.predictionsTotalDelta ?? 0),
     predictionsCorrect: state.user.predictionsCorrect + (patch.predictionsCorrectDelta ?? 0),
+    causeChainTotal: state.user.causeChainTotal + (patch.causeChainTotalDelta ?? 0),
+    causeChainCorrect: state.user.causeChainCorrect + (patch.causeChainCorrectDelta ?? 0),
     badges: nextUnlockedBadgeIds,
   };
 
@@ -117,6 +121,8 @@ const applyLocalProgress = (patch: {
       quizzesCorrect: prev.user.quizzesCorrect + (patch.quizzesCorrectDelta ?? 0),
       predictionsTotal: prev.user.predictionsTotal + (patch.predictionsTotalDelta ?? 0),
       predictionsCorrect: prev.user.predictionsCorrect + (patch.predictionsCorrectDelta ?? 0),
+      causeChainTotal: prev.user.causeChainTotal + (patch.causeChainTotalDelta ?? 0),
+      causeChainCorrect: prev.user.causeChainCorrect + (patch.causeChainCorrectDelta ?? 0),
       badges: nextBadges,
     },
     ui: floatId
@@ -169,6 +175,8 @@ const applyLocalProgress = (patch: {
         quizzes_correct: state.user.quizzesCorrect + (patch.quizzesCorrectDelta ?? 0),
         predictions_total: state.user.predictionsTotal + (patch.predictionsTotalDelta ?? 0),
         predictions_correct: state.user.predictionsCorrect + (patch.predictionsCorrectDelta ?? 0),
+        cause_chains_total: state.user.causeChainTotal + (patch.causeChainTotalDelta ?? 0),
+        cause_chains_correct: state.user.causeChainCorrect + (patch.causeChainCorrectDelta ?? 0),
         battle_rating: nextBattleRating,
         battle_tier: nextBattleTier,
         wins: user.wins + (patch.winsDelta ?? 0),
@@ -268,5 +276,26 @@ export const recordBattleProgress = (result: BattleResult, xpDelta: number, batt
   });
   void trackActivity(user.id, 'battle', undefined, { streakCount: nextUser?.streakCount }).catch((error) => {
     console.error('Failed to record battle activity', error);
+  });
+};
+
+export const recordCauseChainProgress = (
+  correct: boolean,
+  xpDelta: number,
+  articleMeta?: { title?: string; category?: string },
+) => {
+  const user = useAuthStore.getState().user;
+  if (!user) return;
+  const nextUser = applyLocalProgress({
+    xpDelta,
+    causeChainTotalDelta: 1,
+    causeChainCorrectDelta: correct ? 1 : 0,
+  });
+  void trackActivity(user.id, 'cause_chain', undefined, {
+    streakCount: nextUser?.streakCount,
+    articleTitle: articleMeta?.title,
+    articleCategory: articleMeta?.category,
+  }).catch((error) => {
+    console.error('Failed to record cause chain activity', error);
   });
 };

@@ -5,11 +5,12 @@ import { StreakBadge } from './StreakBadge';
 import { LevelBadge } from './LevelBadge';
 import { AvatarVisual } from './AvatarVisual';
 import { motion } from 'framer-motion';
-import { Home, BookOpen, Trophy, User, BarChart3 } from 'lucide-react';
+import { Home, BookOpen, Trophy, User, BarChart3, Brain } from 'lucide-react';
 
 const navItems = [
   { path: '/home', icon: Home, label: 'Feed' },
   { path: '/upsc', icon: BookOpen, label: 'UPSC' },
+  { path: '/cause-chain', icon: Brain, label: 'Chain' },
   { path: '/leaderboard', icon: Trophy, label: 'Rank' },
   { path: '/profile', icon: User, label: 'Profile' },
 ];

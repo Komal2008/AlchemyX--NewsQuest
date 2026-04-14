@@ -170,6 +170,15 @@ ${input.context.slice(0, 3500)}
   }
 };
 
+// Helper to add timeout to async operations
+const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+};
+
 router.post('/resolve', async (req, res, next) => {
   try {
     const parsed = parseBody(req.body as ResolveBody);
@@ -181,21 +190,44 @@ router.post('/resolve', async (req, res, next) => {
     }
 
     const q = buildQuery(parsed.headline, parsed.summary, parsed.category);
-    const latest = await searchNews(q, {
-      country: parsed.country || 'in',
-      language: parsed.language || 'en',
-    });
+    
+    // Search for news with 8 second timeout
+    let latest;
+    try {
+      latest = await withTimeout(
+        searchNews(q, {
+          country: parsed.country || 'in',
+          language: parsed.language || 'en',
+        }),
+        8000,
+        'News search'
+      );
+    } catch (searchError) {
+      console.warn('News search failed or timed out:', searchError);
+      latest = { articles: [] };
+    }
 
     const context = latest.articles
       .slice(0, 5)
       .map((article) => `${article.headline}. ${article.summary}`)
       .join('\n\n');
 
-    const aiPick = await tryBytezResolution({
-      question: parsed.question,
-      options: parsed.options,
-      context,
-    });
+    // Try Bytez resolution with 6 second timeout
+    let aiPick = null;
+    try {
+      aiPick = await withTimeout(
+        tryBytezResolution({
+          question: parsed.question,
+          options: parsed.options,
+          context,
+        }),
+        6000,
+        'Bytez resolution'
+      );
+    } catch (bytezError) {
+      console.warn('Bytez resolution failed or timed out:', bytezError);
+      aiPick = null;
+    }
 
     const fallback = scoreOptionsAgainstContext(parsed.options, context || `${parsed.headline} ${parsed.summary}`);
     const resolvedIndex = aiPick?.resolvedIndex ?? fallback.bestIndex;
