@@ -1,4 +1,4 @@
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useGameStore } from '@/store/gameStore';
 import { generateArticleGameplay } from '@/lib/newsApi';
 import { buildFastGameplay } from '@/lib/articleGameplay';
@@ -7,7 +7,7 @@ import { HUDBar } from '@/components/game/HUDBar';
 import { GlassCard } from '@/components/game/GlassCard';
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Clock, BookOpen } from 'lucide-react';
+import { ArrowLeft, Clock } from 'lucide-react';
 import { markUpscArticleCompleted } from '@/data/upscProgress';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 
@@ -21,29 +21,26 @@ const extractCompleteSentences = (text: string) => {
   return [normalized];
 };
 
-const dedupeTextSentences = (text: string) => {
-  const sentences = extractCompleteSentences(text);
-  if (sentences.length === 0) return '';
+const dedupeSentences = (sentences: string[]) => {
   const seen = new Set<string>();
-  const unique = sentences.filter((sentence) => {
+  return sentences.filter((sentence) => {
     const key = normalizeText(sentence).toLowerCase();
     if (!key || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  return unique.join(' ');
+};
+
+const dedupeTextSentences = (text: string) => {
+  const sentences = extractCompleteSentences(text);
+  if (sentences.length === 0) return '';
+  return dedupeSentences(sentences).join(' ');
 };
 
 const toParagraphs = (text: string) => {
   const sentences = extractCompleteSentences(text);
   if (sentences.length === 0) return [];
-  const seen = new Set<string>();
-  const deduped = sentences.filter((sentence) => {
-    const key = normalizeText(sentence).toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const deduped = dedupeSentences(sentences);
   const paragraphs: string[] = [];
   for (let i = 0; i < deduped.length; i += 3) {
     paragraphs.push(deduped.slice(i, i + 3).join(' ').trim());

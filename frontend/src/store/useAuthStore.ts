@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useGameStore, initialGameState } from '@/store/gameStore';
 
 export interface UserData {
   id: string;
@@ -43,7 +44,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isAuthenticated: false,
   login: (user) => set({ user, isAuthenticated: true }),
-  logout: () => set({ user: null, isAuthenticated: false }),
+  logout: () => {
+    set({ user: null, isAuthenticated: false });
+    useGameStore.setState(initialGameState);
+  },
   updateUser: (data) =>
     set((state) => {
       const updated = state.user ? { ...state.user, ...data } : null;
